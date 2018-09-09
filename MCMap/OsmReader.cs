@@ -16,6 +16,7 @@ namespace MinecraftMapper {
         public readonly Dictionary<string, Building> BuildingsByAddress = new Dictionary<string, Building>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
         //public readonly Dictionary<long, SeattleNode> AddressNodes = new Dictionary<long, SeattleNode>();
+        public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
         public readonly RankedDictionary<double, RankedDictionary<double, SeattleNode>> OrderedNodes = new RankedDictionary<double, RankedDictionary<double, SeattleNode>>();
         public readonly RankedDictionary<double, RankedDictionary<double, List<Way>>> OrderedWays = new RankedDictionary<double, RankedDictionary<double, List<Way>>>();
         private readonly string _sourceXml;
@@ -57,6 +58,12 @@ namespace MinecraftMapper {
             Zebra,
             TrafficSignals,
             Uncontrolled
+        }
+
+        public enum SignType {
+            None,
+            StreetLamp,
+            TrafficSignal
         }
 
         public enum RoadType {
@@ -256,6 +263,8 @@ namespace MinecraftMapper {
                                 }
                                 busNodes.Add(new Node(lat, longitude));
                             }
+                        } else if (tags.signType != SignType.None) {
+                            Signs[new Node(lat, longitude)] = tags.signType;
                         } else if (tags.houseNumber != null && tags.street != null) {
                             RankedDictionary<double, SeattleNode> longNodes;
                             if (!OrderedNodes.TryGetValue(lat, out longNodes)) {
@@ -446,139 +455,11 @@ namespace MinecraftMapper {
             public string source;
             public int? stories;
             public bool? shelter;
-            internal CrossingType crossing;
-            internal BarrierKind barrier;
+            public CrossingType crossing;
+            public BarrierKind barrier;
             public Surface surface;
+            public SignType signType;
         }
-
-#if FALSE
-        private static void ReadTag(ref TagInfo tagInfo, XmlNode node) {
-            var key = node.Attributes["k"].Value;
-            var value = node.Attributes["v"].Value;
-            switch (key) {
-                case "source":
-                    tagInfo.source = value;
-                    break;
-                case "height":
-                    double height;
-                    if (Double.TryParse(value, out height)) {
-                        tagInfo.stories = (int)(height / 4);
-                    }
-                    break;
-                case "building:material": tagInfo.material = ReadMaterial(value); break;
-                case "building:levels":
-                    int levels;
-                    if (Int32.TryParse(value, out levels)) {
-                        tagInfo.stories = levels;
-                    }
-                    break;
-                case "sidewalk":
-                    switch (value) {
-                        case "both": tagInfo.sidewalk = Sidewalk.Both; break;
-                        case "right": tagInfo.sidewalk = Sidewalk.Right; break;
-                        case "left": tagInfo.sidewalk = Sidewalk.Left; break;
-                    }
-                    break;
-                case "amenity":
-                    tagInfo.amenity = ReadAmenity(value);
-                    break;
-                case "layer":
-                    tagInfo.layer = Int32.Parse(value);
-                    break;
-                case "building":
-                    tagInfo.building = ReadBuildingType(value);
-                    break;
-                case "addr:housenumber":
-                    tagInfo.houseNumber = value;
-                    break;
-                case "addr:street":
-                    tagInfo.street = value;
-                    break;
-                case "lanes":
-                    tagInfo.lanes = Convert.ToInt32(value);
-                    break;
-                case "shelter":
-                    switch (value) {
-                        case "yes": tagInfo.shelter = true; break;
-                        case "no": tagInfo.shelter = false; break;
-                        default:
-                            Console.WriteLine("Unknown shelter: " + value);
-                            break;
-                    }
-                    break;
-                case "crossing":
-                    switch (value) {
-                        case "uncontrolled;zebra":
-                        case "zebra": tagInfo.crossing = CrossingType.Zebra; break;
-                        case "traffic_signals": tagInfo.crossing = CrossingType.TrafficSignals; break;
-                        case "uncontrolled": tagInfo.crossing = CrossingType.Uncontrolled; break;
-                        case "unmarked": break;
-                        case "no": break;
-                        case "island": break;
-                        case "yes": break;
-                        case "traffic_signals;marked": break;
-                        case "controlled": break;
-                        case "pedestrian_signals": break;
-                        case "marked": break;
-                        default:
-                            Console.WriteLine("Unknown crossing: " + value);
-                            break;
-                    }
-                    break;
-                case "highway":
-                    switch (value) {
-                        case "bus_stop": tagInfo.roadType = RoadType.BusStop; break;
-                        case "service": tagInfo.roadType = RoadType.Service; break;
-                        case "tertiary":
-                        case "living_street":
-                        case "residential": tagInfo.roadType = RoadType.Residential; break;
-                        case "path": tagInfo.roadType = RoadType.Path; break;
-                        case "footway": tagInfo.roadType = RoadType.FootWay; break;
-                        case "cycleway": tagInfo.roadType = RoadType.CycleWay; break;
-                        case "motorway_link": tagInfo.roadType = RoadType.MotorwayLink; break;
-                        case "motorway": tagInfo.roadType = RoadType.Motorway; break;
-                        case "primary": tagInfo.roadType = RoadType.Primary; break;
-                        case "secondary": tagInfo.roadType = RoadType.Secondary; break;
-                        case "trunk": tagInfo.roadType = RoadType.Trunk; break;
-                        case "motorway_junction": break;
-                        case "traffic_signals": break;
-                        case "crossing": tagInfo.roadType = RoadType.Crossing; break;
-                        case "stop": break;
-                        case "turning_circle": break;
-                        case "elevator": break;
-                        case "give_way": break;
-                        case "turning_loop": break;
-                        case "mini_roundabout": break;
-                        case "passing_place":
-                            break;
-                        case "street_lamp": break;
-                        case "traffic_sign": break;
-                        case "noexit": break;
-                        case "milestone": break;
-                        case "steps": break;
-                        case "track": break;
-                        case "trunk_link": break;
-                        case "primary_link": break;
-                        case "secondary_link": break;
-                        case "tertiary_link": break;
-                        case "unclassified": break;
-                        case "pedestrian": break;
-                        case "construction": break;
-                        case "abandoned": break;
-                        case "road": break;
-                        case "corridor": break;
-                        case "proposed":
-                        default:
-                            Console.WriteLine("Unknown highway: " + value);
-                            break;
-                    }
-                    break;
-                case "name":
-                    tagInfo.name = value;
-                    break;
-            }
-        }
-#endif
 
         public enum BarrierKind {
             None,
@@ -742,8 +623,8 @@ namespace MinecraftMapper {
                         case "mini_roundabout": break;
                         case "passing_place":
                             break;
-                        case "street_lamp": break;
-                        case "traffic_sign": break;
+                        case "street_lamp":  tagInfo.signType = SignType.StreetLamp;  break;
+                        case "traffic_sign": tagInfo.signType = SignType.TrafficSignal; break;
                         case "noexit": break;
                         case "milestone": break;
                         case "steps": break;

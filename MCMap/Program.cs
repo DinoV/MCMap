@@ -71,6 +71,8 @@ namespace MinecraftMapper {
                 _world.Save();
 
                 DrawBarriers(buildingPoints);
+
+                DrawSigns();
                 _world.Save();
             } catch (Exception e) {
                 _world.Save();
@@ -79,6 +81,20 @@ namespace MinecraftMapper {
             DateTime done = DateTime.Now;
             Console.WriteLine("All done, data processing {0}, total {1}", dataProcessing - startTime, done - startTime);
             Console.ReadLine();
+        }
+        
+        private void DrawSigns() {
+            int cur = 0;
+            foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
+                if ((++cur % 100) == 0) {
+                    _world.SaveBlocks();
+                }
+
+                if (sign.Value == OsmReader.SignType.StreetLamp) {
+                    var pos = _conv.ToBlock(sign.Key.Lat, sign.Key.Long);
+                    DrawStreetLamp(Direction.East, pos);
+                }
+            }
         }
 
         private void DrawBarriers(HashSet<BlockPosition> buildingPositions) {
@@ -203,6 +219,33 @@ namespace MinecraftMapper {
             East,
             West
         }
+
+        private void DrawStreetLamp(Direction direction, BlockPosition center) {
+            var height = _bm.GetHeight(center.X, center.Z);
+            const int LampHeight = 8, Length = 3;
+            for(int i = 0; i< LampHeight; i++) {
+                _bm.SetID(center.X, height + i, center.Z, BlockType.COBBLESTONE_WALL);
+                _bm.SetData(center.X, height + i, center.Z, 0);
+            }
+
+            for (int i = 0; i<Length; i++) {
+                int x = center.X, z = center.Z;
+                switch (direction) {
+                    case Direction.East: x += i; break;
+                    case Direction.West: x -= i; break;
+                    case Direction.North: z -= i; break;
+                    case Direction.South: z += i; break;
+                }
+
+                _bm.SetID(x, height + LampHeight, z, BlockType.STONE_SLAB);
+                _bm.SetData(x, height + LampHeight, z, 0);
+                if (i == Length - 1) {
+                    _bm.SetID(x, height + LampHeight - 1, z, BlockType.SEA_LANTERN);
+                    _bm.SetData(x, height + LampHeight - 1, z, 0);
+                }
+            }
+        }
+
 
         private void DrawBusStop(Direction direction, BlockPosition center) {
             if (center.X < 5 || center.Z < 5) {
