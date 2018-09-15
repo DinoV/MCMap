@@ -7,18 +7,13 @@ using System.Xml.Linq;
 
 namespace MinecraftMapper {
     class OsmReader {
-        public readonly Dictionary<long, Node> Nodes = new Dictionary<long, Node>();
         public readonly Dictionary<long, Way> Ways = new Dictionary<long, Way>();
         public readonly Dictionary<string, List<Way>> RoadsByName = new Dictionary<string, List<Way>>();
         public readonly Dictionary<long, Building> Buildings = new Dictionary<long, Building>();
         public readonly HashSet<Barrier> Barriers = new HashSet<Barrier>();
-        public readonly Dictionary<long, Building> SeattleBuildings = new Dictionary<long, Building>();
         public readonly Dictionary<string, Building> BuildingsByAddress = new Dictionary<string, Building>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
-        //public readonly Dictionary<long, SeattleNode> AddressNodes = new Dictionary<long, SeattleNode>();
         public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
-        public readonly RankedDictionary<double, RankedDictionary<double, SeattleNode>> OrderedNodes = new RankedDictionary<double, RankedDictionary<double, SeattleNode>>();
-        public readonly RankedDictionary<double, RankedDictionary<double, List<Way>>> OrderedWays = new RankedDictionary<double, RankedDictionary<double, List<Way>>>();
         private readonly string _sourceXml;
 
         public OsmReader(string sourceXml) {
@@ -63,7 +58,9 @@ namespace MinecraftMapper {
         public enum SignType {
             None,
             StreetLamp,
-            TrafficSignal
+            TrafficSignal,
+            Stop,
+            TrafficSign
         }
 
         public enum RoadType {
@@ -171,13 +168,15 @@ namespace MinecraftMapper {
             public readonly Sidewalk Sidewalk;
             public readonly CrossingType Crossing;
             public readonly Surface Surface;
+            public readonly bool OneWay;
 
-            public Way(string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface) {
+            public Way(string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay) {
                 Name = name;
                 Nodes = nodes;
                 Lanes = lanes;
                 RoadType = roadType;
                 Sidewalk = sidewalk;
+                OneWay = oneWay;
                 Layer = layer;
                 Crossing = crossing;
                 Surface = surface;
@@ -230,7 +229,11 @@ namespace MinecraftMapper {
             }
         }
 
-        public void ReadData() {            
+        public void ReadData() {
+            var allNodes = new Dictionary<long, Node>();
+            RankedDictionary<double, RankedDictionary<double, SeattleNode>> orderedNodes = new RankedDictionary<double, RankedDictionary<double, SeattleNode>>();
+            RankedDictionary<double, RankedDictionary<double, List<Way>>> orderedWays = new RankedDictionary<double, RankedDictionary<double, List<Way>>>();
+
             var reader = XmlReader.Create(new FileStream(_sourceXml, FileMode.Open));
             HashSet<string> nodeNames = new HashSet<string>() {
                 { "node" },
@@ -239,7 +242,7 @@ namespace MinecraftMapper {
             foreach (var data in ElementsNamed(reader, nodeNames)) {
                 TagInfo tags = new TagInfo();
                 switch (data.Name.LocalName) {
-                    case "node":                        
+                    case "node":
                         var id = Convert.ToInt64(data.Attribute("id").Value);
                         var lat = Convert.ToDouble(data.Attribute("lat").Value);
                         var longitude = Convert.ToDouble(data.Attribute("lon").Value);
@@ -250,7 +253,20 @@ namespace MinecraftMapper {
                                     break;
                             }
                         }
-                        if (tags.roadType == RoadType.BusStop) {
+                        var newNode = allNodes[id] = new Node(lat, longitude);
+                        if (tags.crossing == CrossingType.Zebra) {
+                            var zebra = Ways[id] = new Way(
+                                tags.name,
+                                new[] { new Node(lat, longitude) },
+                                tags.lanes,
+                                tags.roadType,
+                                tags.sidewalk,
+                                tags.layer,
+                                tags.crossing,
+                                tags.surface,
+                                tags.oneWay
+                            );
+                        } else if (tags.roadType == RoadType.BusStop) {
                             if (tags.name != null && (tags.shelter ?? false)) {
                                 var streetNames = tags.name.Split('&');
                                 if (streetNames.Length != 2) {
@@ -264,22 +280,21 @@ namespace MinecraftMapper {
                                 busNodes.Add(new Node(lat, longitude));
                             }
                         } else if (tags.signType != SignType.None) {
-                            Signs[new Node(lat, longitude)] = tags.signType;
+                            Signs[newNode] = tags.signType;
                         } else if (tags.houseNumber != null && tags.street != null) {
                             RankedDictionary<double, SeattleNode> longNodes;
-                            if (!OrderedNodes.TryGetValue(lat, out longNodes)) {
-                                longNodes = OrderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
+                            if (!orderedNodes.TryGetValue(lat, out longNodes)) {
+                                longNodes = orderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
                             }
                             longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
                         }
-                        Nodes[id] = new Node(lat, longitude);
                         break;
                     case "way":
                         List<Node> nodes = new List<Node>();
                         foreach (var node in data.Descendants()) {
                             switch (node.Name.LocalName) {
                                 case "nd":
-                                    nodes.Add(Nodes[Convert.ToInt64(node.Attribute("ref").Value)]);
+                                    nodes.Add(allNodes[Convert.ToInt64(node.Attribute("ref").Value)]);
                                     break;
                                 case "tag":
                                     ReadTag(ref tags, node);
@@ -303,7 +318,7 @@ namespace MinecraftMapper {
                             }
 
                             int itemsCount = 0;
-                            foreach (var group in OrderedNodes.ElementsBetween(minLat, maxLat)) {
+                            foreach (var group in orderedNodes.ElementsBetween(minLat, maxLat)) {
                                 foreach (var longAndNode in group.Value.ElementsBetween(minLong, maxLong)) {
                                     var node = longAndNode.Value;
                                     if (node.Lat >= minLat && node.Lat <= maxLat &&
@@ -333,16 +348,17 @@ namespace MinecraftMapper {
                                 tags.sidewalk,
                                 tags.layer,
                                 tags.crossing,
-                                tags.surface
+                                tags.surface,
+                                tags.oneWay
                             );
                             foreach (var point in nodes) {
-                                RankedDictionary<double, List<Way>> orderedWays = new RankedDictionary<double, List<Way>>();
-                                if (!OrderedWays.TryGetValue(point.Lat, out orderedWays)) {
-                                    OrderedWays[point.Lat] = orderedWays = new RankedDictionary<double, List<Way>>();
+                                RankedDictionary<double, List<Way>> orderedLatWays = new RankedDictionary<double, List<Way>>();
+                                if (!orderedWays.TryGetValue(point.Lat, out orderedLatWays)) {
+                                    orderedWays[point.Lat] = orderedLatWays = new RankedDictionary<double, List<Way>>();
                                 }
                                 List<Way> ways;
-                                if (!orderedWays.TryGetValue(point.Long, out ways)) {
-                                    orderedWays[point.Long] = ways = new List<Way>();
+                                if (!orderedLatWays.TryGetValue(point.Long, out ways)) {
+                                    orderedLatWays[point.Long] = ways = new List<Way>();
                                 }
                                 ways.Add(road);
                             }
@@ -459,6 +475,7 @@ namespace MinecraftMapper {
             public BarrierKind barrier;
             public Surface surface;
             public SignType signType;
+            public bool oneWay;
         }
 
         public enum BarrierKind {
@@ -475,6 +492,11 @@ namespace MinecraftMapper {
             var key = node.Attribute("k").Value;
             var value = node.Attribute("v").Value;
             switch (key) {
+                case "oneway":
+                    if (value == "yes") {
+                        tagInfo.oneWay = true;
+                    }
+                    break;
                 case "surface":
                     switch (value) {
                         case "asphalt;concrete": break;
@@ -613,9 +635,9 @@ namespace MinecraftMapper {
                         case "secondary": tagInfo.roadType = RoadType.Secondary; break;
                         case "trunk": tagInfo.roadType = RoadType.Trunk; break;
                         case "motorway_junction": break;
-                        case "traffic_signals": break;
+                        case "traffic_signals": tagInfo.signType = SignType.TrafficSignal;  break;
                         case "crossing": tagInfo.roadType = RoadType.Crossing; break;
-                        case "stop": break;
+                        case "stop": tagInfo.signType = SignType.Stop;  break;
                         case "turning_circle": break;
                         case "elevator": break;
                         case "give_way": break;
@@ -624,7 +646,7 @@ namespace MinecraftMapper {
                         case "passing_place":
                             break;
                         case "street_lamp":  tagInfo.signType = SignType.StreetLamp;  break;
-                        case "traffic_sign": tagInfo.signType = SignType.TrafficSignal; break;
+                        case "traffic_sign": tagInfo.signType = SignType.TrafficSign; break;
                         case "noexit": break;
                         case "milestone": break;
                         case "steps": break;
