@@ -1,6 +1,7 @@
 ﻿using Kaos.Collections;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Xml;
 using System.Xml.Linq;
@@ -14,7 +15,13 @@ namespace MinecraftMapper {
         public readonly Dictionary<string, Building> BuildingsByAddress = new Dictionary<string, Building>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
         public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
+        public readonly Dictionary<Node, List<Way>> RoadsByNode = new Dictionary<Node, List<Way>>();
         private readonly string _sourceXml;
+
+        public class SignInfo {
+            public readonly SignType Sign;
+            public readonly List<Way> Ways = new List<Way>();
+        }
 
         public OsmReader(string sourceXml) {
             _sourceXml = sourceXml;
@@ -191,17 +198,19 @@ namespace MinecraftMapper {
             public double? PrimaryLat;
             public double? PrimaryLong;
             public readonly Material Material;
+            public readonly RoofInfo Roof;
 
-            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, Node[] nodes) {
+            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, RoofInfo roofInfo, Node[] nodes) {
                 Name = name;
                 HouseNumber = houseNumber;
                 Street = street;
                 Amenity = amenity;
                 Nodes = nodes;
                 Material = material;
+                Roof = roofInfo;
             }
 
-            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, double lat, double longitude, Node[] nodes) {
+            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, double lat, double longitude, RoofInfo roofInfo, Node[] nodes) {
                 Name = name;
                 HouseNumber = houseNumber;
                 Street = street;
@@ -209,6 +218,7 @@ namespace MinecraftMapper {
                 Material = material;
                 PrimaryLat = lat;
                 PrimaryLong = longitude;
+                Roof = roofInfo;
                 Nodes = nodes;
             }
         }
@@ -232,7 +242,6 @@ namespace MinecraftMapper {
         public void ReadData() {
             var allNodes = new Dictionary<long, Node>();
             RankedDictionary<double, RankedDictionary<double, SeattleNode>> orderedNodes = new RankedDictionary<double, RankedDictionary<double, SeattleNode>>();
-            RankedDictionary<double, RankedDictionary<double, List<Way>>> orderedWays = new RankedDictionary<double, RankedDictionary<double, List<Way>>>();
 
             var reader = XmlReader.Create(new FileStream(_sourceXml, FileMode.Open));
             HashSet<string> nodeNames = new HashSet<string>() {
@@ -253,11 +262,21 @@ namespace MinecraftMapper {
                                     break;
                             }
                         }
-                        var newNode = allNodes[id] = new Node(lat, longitude);
+                        Node newNode;
+                        if (tags.houseNumber != null && tags.street != null) {
+                            RankedDictionary<double, SeattleNode> longNodes;
+                            if (!orderedNodes.TryGetValue(lat, out longNodes)) {
+                                longNodes = orderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
+                            }
+                            newNode = longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
+                        } else {
+                            newNode = allNodes[id] = new Node(lat, longitude);
+                        }
+                        
                         if (tags.crossing == CrossingType.Zebra) {
                             var zebra = Ways[id] = new Way(
                                 tags.name,
-                                new[] { new Node(lat, longitude) },
+                                new[] { newNode },
                                 tags.lanes,
                                 tags.roadType,
                                 tags.sidewalk,
@@ -277,17 +296,11 @@ namespace MinecraftMapper {
                                 if (!BusStops.TryGetValue(normalized, out busNodes)) {
                                     BusStops[normalized] = busNodes = new List<Node>();
                                 }
-                                busNodes.Add(new Node(lat, longitude));
+                                busNodes.Add(newNode);
                             }
                         } else if (tags.signType != SignType.None) {
                             Signs[newNode] = tags.signType;
-                        } else if (tags.houseNumber != null && tags.street != null) {
-                            RankedDictionary<double, SeattleNode> longNodes;
-                            if (!orderedNodes.TryGetValue(lat, out longNodes)) {
-                                longNodes = orderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
-                            }
-                            longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
-                        }
+                        } 
                         break;
                     case "way":
                         List<Node> nodes = new List<Node>();
@@ -302,8 +315,21 @@ namespace MinecraftMapper {
                             }
                         }
 
+                        RoofInfo roof = null;
+                        if (tags.roofType != RoofType.None ||
+                            tags.roofColor != null) {
+                            roof = new RoofInfo(tags.roofType, tags.roofColor, tags.roofDirection, tags.roofHeight, tags.roofMaterial, tags.roofOrientationAcross);
+                        }
                         if (tags.building != BuildingType.None) {
-                            var buildingObj = Buildings[Convert.ToInt64(data.Attribute("id").Value)] = new Building(tags.name, tags.houseNumber, tags.street, tags.amenity, tags.material, nodes.ToArray());
+                            var buildingObj = Buildings[Convert.ToInt64(data.Attribute("id").Value)] = new Building(
+                                tags.name, 
+                                tags.houseNumber, 
+                                tags.street, 
+                                tags.amenity, 
+                                tags.material,
+                                roof,
+                                nodes.ToArray()
+                            );
                             buildingObj.Stories = tags.stories;
                             if (tags.houseNumber != null && tags.street != null) {
                                 BuildingsByAddress[tags.houseNumber + " " + tags.street] = buildingObj;
@@ -331,6 +357,7 @@ namespace MinecraftMapper {
                                             tags.material,
                                             node.Lat,
                                             node.Long,
+                                            roof,
                                             nodes.ToArray());
                                         buildingFromPoint.Stories = tags.stories;
                                         itemsCount++;
@@ -352,13 +379,9 @@ namespace MinecraftMapper {
                                 tags.oneWay
                             );
                             foreach (var point in nodes) {
-                                RankedDictionary<double, List<Way>> orderedLatWays = new RankedDictionary<double, List<Way>>();
-                                if (!orderedWays.TryGetValue(point.Lat, out orderedLatWays)) {
-                                    orderedWays[point.Lat] = orderedLatWays = new RankedDictionary<double, List<Way>>();
-                                }
                                 List<Way> ways;
-                                if (!orderedLatWays.TryGetValue(point.Long, out ways)) {
-                                    orderedLatWays[point.Long] = ways = new List<Way>();
+                                if (!RoadsByNode.TryGetValue(point, out ways)) {
+                                    RoadsByNode[point] = ways = new List<Way>(1);
                                 }
                                 ways.Add(road);
                             }
@@ -370,21 +393,54 @@ namespace MinecraftMapper {
                                 roads.Add(road);
                             }
                         } else if (tags.barrier != BarrierKind.None) {
-                            Barriers.Add(new Barrier(nodes.ToArray(), tags.barrier));
+                            Barriers.Add(new Barrier(nodes.ToArray(), tags.barrier, tags.wall));
                         }
                         break;
                 }
             }
         }
 
+        public class RoofInfo {
+            public readonly RoofType Type;
+            public readonly int? Direction;
+            public readonly Color? Color;
+            public readonly double? Height;
+            public readonly Material? Material;
+            public readonly bool OrientationAcross;
+
+            public RoofInfo(RoofType roofType, Color? roofColor, int? roofDirection, double? roofHeight, Material? roofMaterial, bool roofOrientationAcross) {
+                Type = roofType;
+                Color = roofColor;
+                Direction = roofDirection;
+                Height = roofHeight;
+                Material = roofMaterial;
+                OrientationAcross = roofOrientationAcross;
+            }
+        }
+
         public class Barrier {
             public readonly Node[] Nodes;
             public readonly BarrierKind Kind;
+            public readonly Wall Wall;
 
-            public Barrier(Node[] nodes, BarrierKind kind) {
+            public Barrier(Node[] nodes, BarrierKind kind, Wall wall) {
                 Nodes = nodes;
                 Kind = kind;
+                Wall = wall;
             }
+        }
+
+        public enum Wall {
+            None,
+            DryStone,
+            Brick,
+            Flint,
+            NoiseBarrier,
+            JerseyBarrier,
+            Gabion,
+            Seawall,
+            FloodWall,
+            CastleWall
         }
 
         private string NormalizeName(string name) {
@@ -476,6 +532,41 @@ namespace MinecraftMapper {
             public Surface surface;
             public SignType signType;
             public bool oneWay;
+            public RoofType roofType;
+            public double? roofHeight;
+            internal Color? roofColor;
+            internal bool roofOrientationAcross;
+            internal int? roofDirection;
+            internal Material? roofMaterial;
+            public Wall wall;
+            internal Parking parking;
+        }
+
+        public enum Parking {
+            None,
+            Surface,
+            GarageBoxes,
+            CarPorts,
+            Sheds,
+            RoofTop,
+            Underground,
+            MultiStory
+        }
+
+        public enum RoofType {
+            None,
+            Flat,
+            Skillion,
+            Gabled,
+            HalfHipped,
+            Hipped,
+            Pyramidal,
+            Gambrel,
+            Mansard,
+            Dome,
+            Onion,
+            Round,
+            Saltbox
         }
 
         public enum BarrierKind {
@@ -492,6 +583,55 @@ namespace MinecraftMapper {
             var key = node.Attribute("k").Value;
             var value = node.Attribute("v").Value;
             switch (key) {
+                case "wall":
+                    switch(value) {
+                        case "dry_stone": tagInfo.wall = Wall.DryStone;break;
+                        case "brick": tagInfo.wall = Wall.Brick; break;
+                        case "flint": tagInfo.wall = Wall.Flint; break;
+                        case "noise_barrier": tagInfo.wall = Wall.NoiseBarrier; break;
+                        case "jersey_barrier": tagInfo.wall = Wall.JerseyBarrier; break;
+                        case "gabion": tagInfo.wall = Wall.Gabion; break;
+                        case "seawall": tagInfo.wall = Wall.Seawall; break;
+                        case "flood_wall": tagInfo.wall = Wall.FloodWall; break;
+                        case "castle_wall": tagInfo.wall = Wall.CastleWall; break;
+                    }
+                    break;
+                case "roof:shape":
+                    switch (value) {
+                        case "flat": tagInfo.roofType = RoofType.Flat; break;
+                        case "skillion": tagInfo.roofType = RoofType.Skillion; break;
+                        case "gabled": tagInfo.roofType = RoofType.Gabled; break;
+                        case "half-hipped": tagInfo.roofType = RoofType.HalfHipped; break;
+                        case "hipped": tagInfo.roofType = RoofType.Hipped; break;
+                        case "pyramidal": tagInfo.roofType = RoofType.Pyramidal; break;
+                        case "gambrel": tagInfo.roofType = RoofType.Gambrel; break;
+                        case "mansard": tagInfo.roofType = RoofType.Mansard; break;
+                        case "dome": tagInfo.roofType = RoofType.Dome; break;
+                        case "onion": tagInfo.roofType = RoofType.Onion; break;
+                        case "round": tagInfo.roofType = RoofType.Round; break;
+                        case "saltbox": tagInfo.roofType = RoofType.Saltbox; break;
+                    }
+                    break;
+                case "roof:height":
+                    double roofHeight;
+                    if (double.TryParse(value, out roofHeight)) {
+                        tagInfo.roofHeight = roofHeight;
+                    }
+                    break;
+                case "roof:colour":
+                    tagInfo.roofColor = ParseColor(value);
+                    break;
+                case "roof:orientation":
+                    if(value == "across") {
+                        tagInfo.roofOrientationAcross = true;
+                    }
+                    break;
+                case "roof:material":
+                    tagInfo.roofMaterial = ReadMaterial(value);
+                    break;
+                case "roof:direction":
+                    tagInfo.roofDirection = ParseDirection(value);
+                    break;
                 case "oneway":
                     if (value == "yes") {
                         tagInfo.oneWay = true;
@@ -511,7 +651,7 @@ namespace MinecraftMapper {
                         case "bricks":
                         case "brick;asphalt;concrete": break;
                         case "brick": tagInfo.surface = Surface.Brick; break;
-                        case "unpaved": tagInfo.surface = Surface.Unpaved;  break;
+                        case "unpaved": tagInfo.surface = Surface.Unpaved; break;
                         case "grass": tagInfo.surface = Surface.Grass; break;
                         case "ground": tagInfo.surface = Surface.Ground; break;
                         case "dirt": tagInfo.surface = Surface.Dirt; break;
@@ -522,7 +662,7 @@ namespace MinecraftMapper {
                         case "fine_gravel": tagInfo.surface = Surface.FineGravel; break;
                         case "railbed": tagInfo.surface = Surface.RailBed; break;
                         case "riprap": tagInfo.surface = Surface.RipRap; break;
-                        case "astr": 
+                        case "astr":
                         case "artificial_turf": tagInfo.surface = Surface.ArtificalTurf; break;
                         case "sett": tagInfo.surface = Surface.Sett; break;
                         case "pebbles": tagInfo.surface = Surface.Pebbles; break;
@@ -573,12 +713,15 @@ namespace MinecraftMapper {
                         case "left": tagInfo.sidewalk = Sidewalk.Left; break;
                     }
                     break;
+                case "parking":
+                    tagInfo.parking = ReadParking(value);
                 case "amenity":
                     tagInfo.amenity = ReadAmenity(value);
                     break;
                 case "layer":
                     tagInfo.layer = Int32.Parse(value);
                     break;
+                case "building:part":
                 case "building":
                     tagInfo.building = ReadBuildingType(value);
                     break;
@@ -635,9 +778,9 @@ namespace MinecraftMapper {
                         case "secondary": tagInfo.roadType = RoadType.Secondary; break;
                         case "trunk": tagInfo.roadType = RoadType.Trunk; break;
                         case "motorway_junction": break;
-                        case "traffic_signals": tagInfo.signType = SignType.TrafficSignal;  break;
+                        case "traffic_signals": tagInfo.signType = SignType.TrafficSignal; break;
                         case "crossing": tagInfo.roadType = RoadType.Crossing; break;
-                        case "stop": tagInfo.signType = SignType.Stop;  break;
+                        case "stop": tagInfo.signType = SignType.Stop; break;
                         case "turning_circle": break;
                         case "elevator": break;
                         case "give_way": break;
@@ -645,7 +788,7 @@ namespace MinecraftMapper {
                         case "mini_roundabout": break;
                         case "passing_place":
                             break;
-                        case "street_lamp":  tagInfo.signType = SignType.StreetLamp;  break;
+                        case "street_lamp": tagInfo.signType = SignType.StreetLamp; break;
                         case "traffic_sign": tagInfo.signType = SignType.TrafficSign; break;
                         case "noexit": break;
                         case "milestone": break;
@@ -673,6 +816,98 @@ namespace MinecraftMapper {
             }
         }
 
+        private static Parking ReadParking(string value) {
+            switch (value) {
+                case "surface": return Parking.Surface;
+                case "multi-storey": return Parking.MultiStory;
+                case "underground": return Parking.Underground;
+                case "rooftop": return Parking.RoofTop;
+                case "sheds": return Parking.Sheds;
+                case "carports": return Parking.CarPorts;
+                case "garage_boxes": return Parking.GarageBoxes;
+            }
+            return Parking.None;
+        }
+
+        private static int? ParseDirection(string value) {
+            int res;
+            if (int.TryParse(value, out res)) {
+                return res;
+            }
+            switch (value) {
+                case "N": return 0;
+                case "NNE": return 22;
+                case "NE": return 45;
+                case "ENE": return 67;
+                case "E": return 90;
+                case "ESE": return 122;
+                case "SE": return 135;
+                case "SSE": return 157;
+                case "S": return 180;
+                case "SSW": return 202;
+                case "SW": return 225;
+                case "WSW": return 247;
+                case "W": return 270;
+                case "WNW": return 292;
+                case "NW": return 315;
+                case "NNW": return 337;
+            }
+            return null;
+        }
+
+        public struct Color {
+            public readonly int R, G, B;
+
+            public Color(int r, int g, int b) {
+                R = r;
+                G = g;
+                B = b;
+            }
+        }
+
+        private static Color? ParseColor(string value) {
+            if (value.StartsWith("#")) {
+                int r, g, b;
+                if (value.Length == 4) {
+                    if (Int32.TryParse(value.Substring(1, 1), NumberStyles.AllowHexSpecifier, null, out r) &&
+                        Int32.TryParse(value.Substring(2, 1), NumberStyles.AllowHexSpecifier, null, out g) &&
+                        Int32.TryParse(value.Substring(3, 1), NumberStyles.AllowHexSpecifier, null, out b)) {
+                        return new Color(r * 16 + r, g * 16 + g, b * 16 + b);
+                    }
+                } else if (value.Length == 7) {
+                    if (Int32.TryParse(value.Substring(1, 2), NumberStyles.AllowHexSpecifier, null, out r) &&
+                        Int32.TryParse(value.Substring(3, 2), NumberStyles.AllowHexSpecifier, null, out g) &&
+                        Int32.TryParse(value.Substring(5, 2), NumberStyles.AllowHexSpecifier, null, out b)) {
+                        return new Color(r, g, b);
+                    }
+                }
+            }
+            switch (value) {
+                case "black": return new Color(0, 0, 0);
+                case "gray":
+                case "grey": return new Color(0x80, 0x80, 0x80);
+                case "maroon": return new Color(0x80, 0, 0);
+                case "olive": return new Color(0x80, 0x80, 0);
+                case "green":  return new Color(0, 0x80, 0);
+                case "teal": return new Color(0, 0x80, 0x80);
+                case "navy": return new Color(0, 0, 0x80);
+                case "purple":  return new Color(0x80, 0, 0x80);
+                case "white": return new Color(0xff, 0xff, 0xff);
+                case "silver":  return new Color(0xc0, 0xc0, 0xc0);
+                case "red": return new Color(0xff, 0, 0);
+                case "yellow": return new Color(0xff, 0xff, 0);
+                case "lime": return new Color(0, 0xff, 0);
+                case "aqua": return new Color(0, 0xff, 0xff);
+                case "blue": return new Color(0, 0, 0xff);
+                case "fuchsia":
+                case "magenta":
+                    return new Color(0xff, 0, 0xff);
+            }
+
+
+            return null;
+        }
+
         private static BuildingType ReadBuildingType(string value) {
             switch (value) {
                 case "yes": return BuildingType.Yes;
@@ -694,13 +929,47 @@ namespace MinecraftMapper {
         public enum Material {
             None,
             Sandstone,
-            Brick
+            Brick,
+            Bamboo,
+            PalmLeaves,
+            Thatch,
+            TarPaper,
+            Stone,
+            RoofTiles,
+            Plants,
+            Metal,
+            Gravel,
+            Grass,
+            Glass,
+            Asphalt,
+            Plastic,
+            Copper,
+            Slate,
+            Wood,
+            Concrete
         }
 
         private static Material ReadMaterial(string value) {
             switch (value) {
                 case "sandstone": return Material.Sandstone;
                 case "brick": return Material.Brick;
+                case "concrete": return Material.Concrete;
+                case "copper": return Material.Copper;
+                case "plastic": return Material.Plastic;
+                case "asphalt": return Material.Asphalt;
+                case "glass": return Material.Glass;
+                case "grass": return Material.Grass;
+                case "gravel": return Material.Gravel;
+                case "metal": return Material.Metal;
+                case "plants": return Material.Plants;
+                case "roof_tiles": return Material.RoofTiles;
+                case "slate": return Material.Slate;
+                case "stone": return Material.Stone;
+                case "tar_paper": return Material.TarPaper;
+                case "thatch": return Material.Thatch;
+                case "wood": return Material.Wood;
+                case "palm_leaves": return Material.PalmLeaves;
+                case "bamboo": return Material.Bamboo;
             }
             return Material.None;
         }
