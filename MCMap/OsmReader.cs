@@ -268,7 +268,7 @@ namespace MinecraftMapper {
                             if (!orderedNodes.TryGetValue(lat, out longNodes)) {
                                 longNodes = orderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
                             }
-                            newNode = longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
+                            allNodes[id] = newNode = longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
                         } else {
                             newNode = allNodes[id] = new Node(lat, longitude);
                         }
@@ -715,6 +715,7 @@ namespace MinecraftMapper {
                     break;
                 case "parking":
                     tagInfo.parking = ReadParking(value);
+                    break;
                 case "amenity":
                     tagInfo.amenity = ReadAmenity(value);
                     break;

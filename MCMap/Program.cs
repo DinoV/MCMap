@@ -1,19 +1,10 @@
 ﻿using CsvHelper;
-using Kaos.Collections;
 using Substrate;
 using Substrate.TileEntities;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Xml;
-
-// This example replaces all instances of one block ID with another in a world.
-// Substrate will handle all of the lower-level headaches that can pop up, such
-// as maintaining correct lighting or replacing TileEntity records for blocks
-// that need them.
-
-// For a more advanced Block Replace example, see replace.cs in NBToolkit.
 
 namespace MinecraftMapper {
     class Mapper {
@@ -109,9 +100,7 @@ namespace MinecraftMapper {
         }
 
         public void MapIt() {
-            if (!_dryRun) {
-                _world.Save();
-            }
+            Save();
             DateTime startTime = DateTime.Now;
             _reader.ReadData();
             GC.Collect();
@@ -126,22 +115,17 @@ namespace MinecraftMapper {
 
                 var roadPoints = DrawRoads();
 
-                DrawSigns(roadPoints);
+                DrawStreetLamps(roadPoints);
 
                 var buildingPoints = DrawBuildings();
-                if (!_dryRun) {
-                    _world.Save();
-                }
+                Save();
 
-                DrawBarriers(buildingPoints);
 
-                if (!_dryRun) {
-                    _world.Save();
-                }
+                //DrawBarriers(buildingPoints);
+
+                Save();
             } catch (Exception e) {
-                if (!_dryRun) {
-                    _world.Save();
-                }
+                Save();
                 WriteLine(e);
             }
             DateTime done = DateTime.Now;
@@ -149,11 +133,17 @@ namespace MinecraftMapper {
             Console.ReadLine();
         }
 
-        private void DrawSigns(Dictionary<BlockPosition, RoadPoint> roadPoints) {
+        private void Save() {
+            if (!_dryRun) {
+                _world.Save();
+            }
+        }
+
+        private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             int cur = 0;
             foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
-                if ((++cur % 100) == 0 && !_dryRun) {
-                    _world.SaveBlocks();
+                if ((++cur % 100) == 0) {
+                    SaveBlocks();
                 }
 
                 if (sign.Value == OsmReader.SignType.StreetLamp) {
@@ -179,8 +169,8 @@ namespace MinecraftMapper {
         private void DrawBarriers(HashSet<BlockPosition> buildingPositions) {
             int cur = 0;
             foreach (var barrier in _reader.Barriers.OrderBy(x => MapOrder(_conv, x.Nodes.First()))) {
-                if ((++cur % 100) == 0 && !_dryRun) {
-                    _world.SaveBlocks();
+                if ((++cur % 100) == 0) {
+                    SaveBlocks();
                 }
                 int blockKind = 0, height = 1;
                 switch (barrier.Kind) {
@@ -229,7 +219,7 @@ namespace MinecraftMapper {
 
         static int Main(string[] args) {
             //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrictCreative2";
-            string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\LIDAR_DEM1_resized_landexpanded6";
+            string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Seattle";
             //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCreativeLidar4_2";
             string log = null;
             string osmData = @"C:\Users\dino_\Downloads\map_seattle.xml";
@@ -296,7 +286,15 @@ namespace MinecraftMapper {
             /*
             roads = new List<long>() {
                 481291015, 343521145, 481291013,
-                361784412, 337739269, 396055523, 243349945
+                361784412, 337739269, 
+                396055523,  // 23rd ave north of union
+                460419028, // 23rd ave south of union
+                243349945,
+                40416132, // east union street
+                256994206, // east union
+                396055524, // east union
+                525497324, // 18th Ave
+                620762218, // East madison between 16th and 19th ave
             };
             buildings = new List<long>() {
                 228850098, 136571516, 456138164
@@ -317,10 +315,22 @@ namespace MinecraftMapper {
         }
 
         enum Direction {
-            North = 8,
             South = 0,
+            SouthSouthWest = 1,
+            SouthWest = 2,
+            WestSouthWest = 3,
+            West = 4,
+            WestNorthWest = 5,
+            NorthWest = 6,
+            NorthNorthWest = 7,
+            North = 8,
+            NorthNorthEast = 9,
+            NorthEast = 10,
+            EastNorthEast = 11,
             East = 12,
-            West = 4
+            EastSouthEast = 13,
+            SouthEast = 14,
+            SouthSouthEast = 15,
         }
 
         enum FullDirection {
@@ -485,18 +495,23 @@ namespace MinecraftMapper {
             //var buildingList = _reader.Buildings.Where(x => buildings.Contains(x.Key));
             foreach (var idAndBuilding in buildingList) {
                 var building = idAndBuilding.Value;
-                if ((++cur % 200) == 0 && !_dryRun) {
-                    _world.SaveBlocks();
+                if ((++cur % 200) == 0) {
+                    SaveBlocks();
                 }
 
                 WriteLine("{0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, _reader.Buildings.Count);
                 DrawBuilding(building, buildingPoints, (int)(idAndBuilding.Key % 16));
             }
 
+            SaveBlocks();
+
+            return buildingPoints;
+        }
+
+        private void SaveBlocks() {
             if (!_dryRun) {
                 _world.SaveBlocks();
             }
-            return buildingPoints;
         }
 
         private void DrawBuilding(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int color) {
@@ -524,10 +539,7 @@ namespace MinecraftMapper {
                 data = color;
             }
 
-            BlockPosition topLeft = new BlockPosition(Int32.MaxValue, Int32.MaxValue),
-              topRight = new BlockPosition(Int32.MinValue, Int32.MaxValue),
-              bottomLeft = new BlockPosition(Int32.MaxValue, Int32.MinValue),
-              bottomRight = new BlockPosition(Int32.MinValue, Int32.MinValue);
+            int top = Int32.MaxValue, left = Int32.MaxValue, bottom = Int32.MinValue, right = Int32.MinValue;
 
             int buildingHeight = Math.Max(6, (int)((building.Stories ?? 1) * 4) + 2);
             int maxHeight = Int32.MinValue;
@@ -537,18 +549,10 @@ namespace MinecraftMapper {
                 var from = _conv.ToBlock(start.Lat, start.Long);
                 var to = _conv.ToBlock(building.Nodes[i].Lat, building.Nodes[i].Long);
 
-                if (from.X <= topLeft.X && from.Z <= topLeft.Z) {
-                    topLeft = from;
-                }
-                if (from.X >= topRight.X && from.Z <= topRight.Z) {
-                    topRight = from;
-                }
-                if (from.X <= bottomLeft.X && from.Z >= bottomLeft.Z) {
-                    bottomLeft = from;
-                }
-                if (from.X >= bottomRight.X && from.Z >= bottomRight.Z) {
-                    bottomRight = from;
-                }
+                top = Math.Min(top, from.Z);
+                bottom = Math.Max(bottom, from.Z);
+                left = Math.Min(left, from.X);
+                right = Math.Max(right, from.X);
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
                     if (_conv.IsValidPoint(point.Block)) {
@@ -589,21 +593,15 @@ namespace MinecraftMapper {
                 //WriteLine("From {0},{1} to {2},{3}", from.X, from.Z, to.X, to.Z);
             }
 
-            
+#if FALSE
             if (building.Roof != null) {
                 var roofStart = maxHeight + buildingHeight - 1;
                 switch (building.Roof.Type) {
                     case OsmReader.RoofType.Hipped:
                         break;
                     case OsmReader.RoofType.Gabled:
-                        var width = Math.Max(
-                            Math.Abs(topLeft.Z - bottomLeft.Z),
-                            Math.Abs(topRight.Z - bottomRight.Z)
-                        );
-                        var len = Math.Max(
-                            Math.Abs(topLeft.X - topRight.X),
-                            Math.Abs(bottomLeft.X - bottomRight.X)
-                        );
+                        var width = Math.Abs(top - bottom);
+                        var len = Math.Abs(left - right);
 
                         if (len > width && !building.Roof.OrientationAcross) {
                             var top = Math.Min(topLeft.Z, topRight.Z);
@@ -651,7 +649,7 @@ namespace MinecraftMapper {
                         break;
                 }
             }
-
+#endif
             int direction = 0;
             if (!string.IsNullOrWhiteSpace(building.HouseNumber) && !string.IsNullOrWhiteSpace(building.Street)) {
                 List<OsmReader.Way> roads;
@@ -902,13 +900,12 @@ namespace MinecraftMapper {
                 roads = _reader.Ways.Values.GroupBy(x => x.Name ?? "").OrderBy(x => MapOrder(_conv, x.First().Nodes.First()));
             }
             var roadPoints = new Dictionary<BlockPosition, RoadPoint>();
-            var intersections = new Dictionary<RoadIntersection, Dictionary<SegmentIntersection, List<BlockPosition>>>();
             //var intersections = new Dictionary<RoadIntersection, List<BlockPosition>>();
             //var roads = new[] { reader.Ways[6358491], reader.Ways[6358495], reader.Ways[158718178], reader.Ways[241283900], reader.Ways[6433374] };
             foreach (var roadGroup in roads) {
                 foreach (var way in roadGroup) {
-                    if ((++cur % 100) == 0 && !_dryRun) {
-                        _world.SaveBlocks();
+                    if ((++cur % 100) == 0) {
+                        SaveBlocks();
                     }
 
                     if (way.RoadType != OsmReader.RoadType.Service) {
@@ -928,7 +925,7 @@ namespace MinecraftMapper {
                     WriteLine("{0} ({1}/{2})", way.Name, cur, _reader.Ways.Count);
                     var style = GetRoadStyle(way);
                     if (style != null) {
-                        style.Render(roadPoints, intersections);
+                        style.Render(roadPoints);
                     }
                 }
 
@@ -963,9 +960,9 @@ namespace MinecraftMapper {
                     }
                 }
                 _reader.BusStops.Remove(roadGroup.Key);
-
-                DrawIntersections(roadPoints, intersections);
             }
+
+            DrawSigns(roadPoints);
 
             foreach (var roadGroup in roads) {
                 foreach (var way in roadGroup) {
@@ -983,13 +980,14 @@ namespace MinecraftMapper {
                                 continue;
                             }
 
+                            var segment = zebraPoint.Segments.First();
                             // we create a line across the road to attempt to draw the zebra on from...
                             var angle = Math.Atan2(
-                                zebraPoint.Segment.Start.Lat - zebraPoint.Segment.End.Lat,
-                                zebraPoint.Segment.Start.Long - zebraPoint.Segment.End.Long
+                                segment.Start.Lat - segment.End.Lat,
+                                segment.Start.Long - segment.End.Long
                             );
 
-                            int width = GetRoadStyle(zebraPoint.Segment.Way).Width;
+                            int width = GetRoadStyle(segment.Way).Width;
                             blockPositions = new[] {
                                 new BlockPosition((int)(Math.Cos(angle)*width + pos.X), (int)(Math.Sin(angle)*width + pos.Z)),
                                 new BlockPosition((int)(-Math.Cos(angle)*width + pos.X), (int)(-Math.Sin(angle)*width + pos.Z))
@@ -1011,25 +1009,26 @@ namespace MinecraftMapper {
                             }
                         }
 
-                        if ((++cur % 100) == 0 && !_dryRun) {
-                            _world.SaveBlocks();
+                        if ((++cur % 100) == 0) {
+                            SaveBlocks();
                         }
                     }
                 }
             }
-            if (!_dryRun) {
-                _world.SaveBlocks();
-            }
+            SaveBlocks();
+
             return roadPoints;
         }
 
         struct RoadPoint {
-            public readonly RoadSegment Segment;
+            public readonly List<RoadSegment> Segments;
             public int Height;
+            public bool IsSidewalk;
 
-            public RoadPoint(RoadSegment segment, int height) {
-                Segment = segment;
+            public RoadPoint(int height, bool isSidewalk) {
+                Segments = new List<RoadSegment>();
                 Height = height;
+                IsSidewalk = isSidewalk;
             }
         }
 
@@ -1054,52 +1053,63 @@ namespace MinecraftMapper {
 
             private const int SidewalkWidth = 3;
 
-            private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position, RoadSegment segment, int height) {
+            private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position, RoadSegment segment, int height, bool isSidewalk = false) {
                 RoadPoint roadPoint;
                 if (!roadPoints.TryGetValue(position, out roadPoint)) {
-                    roadPoints[position] = roadPoint = new RoadPoint(segment, height);
+                    roadPoints[position] = roadPoint = new RoadPoint(height, isSidewalk);
+                } else {
+                    roadPoint.IsSidewalk = isSidewalk;
                 }
-                roadPoints[position] = new RoadPoint(segment, height);
+                roadPoint.Segments.Add(segment);
             }
 
-            public void Render(Dictionary<BlockPosition, RoadPoint> roadPoints, Dictionary<RoadIntersection, Dictionary<SegmentIntersection, List<BlockPosition>>> intersections) {
+            public void Render(Dictionary<BlockPosition, RoadPoint> roadPoints) {
                 var start = Way.Nodes[0];
-                int targetWidth = Width;
+                int initialWidth = Width;
                 if (_leftEdgeId != null) {
-                    targetWidth += SidewalkWidth;
+                    initialWidth += SidewalkWidth;
                 }
                 if (_rightEdgeId != null) {
-                    targetWidth += SidewalkWidth;
+                    initialWidth += SidewalkWidth;
                 }
                 for (int i = 1; i < Way.Nodes.Length; i++) {
                     var from = _conv.ToBlock(start.Lat, start.Long);
                     var to = _conv.ToBlock(Way.Nodes[i].Lat, Way.Nodes[i].Long);
                     var curSegment = new RoadSegment(Way, start, Way.Nodes[i]);
 
+                    var xDelta = Math.Abs(from.X - to.X);
+                    var yDelta = Math.Abs(from.Z - to.Z);
+                    var targetWidth = initialWidth;
+                    if (targetWidth != 1) {
+                        // adjust width based on angle...
+                        var angle = Math.Atan2(xDelta, yDelta);
+                        if (xDelta < yDelta) {
+                            targetWidth = (int)Math.Round(targetWidth * Math.Cos(angle));
+                        } else {
+                            targetWidth = (int)Math.Round(targetWidth * Math.Sin(angle));
+                        }
+                    }
+
                     foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z, targetWidth)) {
                         if (_conv.IsValidPoint(point.Block) && point.Block.X > 1 && point.Block.Z > 1) {
                             RoadPoint existingRoad;
                             bool isIntersection = roadPoints.TryGetValue(point.Block, out existingRoad);
                             if (isIntersection) {
-                                if (existingRoad.Segment.Way == Way ||
-                                    (existingRoad.Segment.Way.Name != null && existingRoad.Segment.Way.Name == Way.Name)) {
-                                    continue;
+                                bool skip = false;
+                                foreach (var segment in existingRoad.Segments) {
+                                    if (segment.Way == Way ||
+                                        (segment.Way.Name != null && segment.Way.Name == Way.Name)) {
+                                        AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height);
+                                        skip = true;
+                                        break;
+                                    } else if (!existingRoad.IsSidewalk && GetRoadWidth(segment.Way) > Width) {
+                                        AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height);
+                                        skip = true;
+                                        break;
+                                    }
                                 }
 
-                                var curIntersection = new SegmentIntersection(curSegment, existingRoad.Segment);
-                                Dictionary<SegmentIntersection, List<BlockPosition>> segmentPoints;
-                                List<BlockPosition> intersectionPoints;
-                                var intersect = new RoadIntersection(Way, existingRoad.Segment.Way);
-                                if (!intersections.TryGetValue(intersect, out segmentPoints)) {
-                                    segmentPoints = intersections[intersect] = new Dictionary<SegmentIntersection, List<BlockPosition>>();
-                                }
-                                if (!segmentPoints.TryGetValue(curIntersection, out intersectionPoints)) {
-                                    intersectionPoints = segmentPoints[curIntersection] = new List<BlockPosition>();
-                                }
-                                intersectionPoints.Add(point.Block);
-
-                                // wider roads take precedence over less wide roads
-                                if (GetRoadWidth(existingRoad.Segment.Way) > Width) {
+                                if (skip) {
                                     continue;
                                 }
                             }
@@ -1117,19 +1127,19 @@ namespace MinecraftMapper {
                                 if (!isIntersection) {
                                     _bm.SetID(point.Block.X, height, point.Block.Z, _leftEdgeId.Value);
                                     _bm.SetData(point.Block.X, height, point.Block.Z, 0);
-                                    roadPoints[point.Block] = new RoadPoint(curSegment, height);
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
                                     ClearPlantLife(_bm, point.Block, height + 1);
                                 }
                             } else if (_rightEdgeId != null && point.Column >= targetWidth - SidewalkWidth) {
                                 if (!isIntersection) {
                                     _bm.SetID(point.Block.X, height, point.Block.Z, _rightEdgeId.Value);
                                     _bm.SetData(point.Block.X, height, point.Block.Z, 0);
-                                    roadPoints[point.Block] = new RoadPoint(curSegment, height);
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
                                     ClearPlantLife(_bm, point.Block, height + 1);
                                 }
                             } else {
                                 if (DrawRoadPoint(point, height)) {
-                                    roadPoints[point.Block] = new RoadPoint(curSegment, height);
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
                             }
@@ -1183,11 +1193,14 @@ namespace MinecraftMapper {
                 case OsmReader.Surface.None:
                     switch (way.RoadType) {
                         case OsmReader.RoadType.Path:
+                            width = 2;
                             id = BlockType.GRAVEL;
                             break;
+                        case OsmReader.RoadType.Residential:
                         case OsmReader.RoadType.Primary:
                         case OsmReader.RoadType.Secondary:
                         case OsmReader.RoadType.Trunk:
+                            width = (way.Lanes ?? 2) * 3;
                             id = BlockType.CONCRETE; data = 8;
                             break;
                         case OsmReader.RoadType.Service:
@@ -1206,7 +1219,7 @@ namespace MinecraftMapper {
                             }
                             break;
                         case OsmReader.RoadType.Motorway:
-                            width = (way.Lanes ?? 2) * 5;
+                            width = (way.Lanes ?? 2) * 4;
                             id = BlockType.CONCRETE; data = 8;
                             break;
                         default:
@@ -1260,277 +1273,475 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawIntersections(Dictionary<BlockPosition, RoadPoint> roadPoints, Dictionary<RoadIntersection, Dictionary<SegmentIntersection, List<BlockPosition>>> intersections) {
-            List<string> aName = new List<string>(4);
-            List<string> bName = new List<string>(4);
-            foreach (var roadIntersection in intersections.OrderBy(x => MapOrder(_conv, x.Key.A.Nodes.First()))) {
-                if (string.IsNullOrEmpty(roadIntersection.Key.A.Name) ||
-                    string.IsNullOrEmpty(roadIntersection.Key.B.Name)) {
-                    continue;
-                }
+        class IntersectionBoundsFinder {
+            private readonly Dictionary<BlockPosition, RoadPoint> _roadPoints;
+            private readonly Stack<BlockPosition> _todo = new Stack<BlockPosition>();
+            private readonly HashSet<BlockPosition> _visited = new HashSet<BlockPosition>();
+            private readonly HashSet<RoadSegment> _segments = new HashSet<RoadSegment>();
 
-                if ((roadIntersection.Key.A.Name == "23rd Avenue" && roadIntersection.Key.B.Name == "East Olive Street") || 
-                    (roadIntersection.Key.B.Name == "23rd Avenue" && roadIntersection.Key.A.Name == "East Olive Street")) {
-                    WriteLine("We mess this up");
-                }
+            public IntersectionBoundsFinder(Dictionary<BlockPosition, RoadPoint> roadPoints) {
+                _roadPoints = roadPoints;
+            }
 
-                List<KeyValuePair<Rect, SegmentIntersection>> rect = new List<KeyValuePair<Rect, SegmentIntersection>>();
-                // First get the bounding rectangles of all of the segments that intersect
-                foreach (var segmentIntersection in roadIntersection.Value) {
-                    Rect r = new Rect();
-                    r.UpperLeft = new BlockPosition(Int32.MaxValue, Int32.MaxValue);
-                    r.BottomRight = new BlockPosition(0, 0);
-
-                    foreach (var point in segmentIntersection.Value) {
-                        if (point.X < r.UpperLeft.X) {
-                            r.UpperLeft = new BlockPosition(point.X, r.UpperLeft.Z);
-                        }
-                        if (point.Z < r.UpperLeft.Z) {
-                            r.UpperLeft = new BlockPosition(point.X, point.Z);
-                        }
-                        if (point.X > r.BottomRight.X) {
-                            r.BottomRight = new BlockPosition(point.X, r.BottomRight.Z);
-                        }
-                        if (point.Z > r.BottomRight.Z) {
-                            r.BottomRight = new BlockPosition(r.BottomRight.X, point.Z);
-                        }
+            public Rect FindBounds(BlockPosition start) {
+                _todo.Push(start);
+                int top = start.Z, bottom = start.Z, left = start.X, right = start.X;
+                do {
+                    var pos = _todo.Pop();
+                    if (CheckIntersectionAndQueue(new BlockPosition(pos.X, pos.Z - 1))) {
+                        top = Math.Min(top, pos.Z - 1);
                     }
+                    if (CheckIntersectionAndQueue(new BlockPosition(pos.X, pos.Z + 1))) {
+                        bottom = Math.Max(bottom, pos.Z + 1);
+                    }
+                    if (CheckIntersectionAndQueue(new BlockPosition(pos.X - 1, pos.Z))) {
+                        left = Math.Min(left, pos.X - 1);
+                    }
+                    if (CheckIntersectionAndQueue(new BlockPosition(pos.X + 1, pos.Z))) {
+                        right = Math.Max(right, pos.X + 1);
+                    }
+                } while (_todo.Count > 0);
+                return new Rect() {
+                    UpperLeft = new BlockPosition(left, top),
+                    BottomRight = new BlockPosition(right, bottom)
+                };
+            }
 
-                    rect.Add(new KeyValuePair<Rect, SegmentIntersection>(r, segmentIntersection.Key));
+            public IEnumerable<RoadSegment> Segments {
+                get {
+                    return _segments;
+                }
+            }
+
+            public bool HasSegments { get { return _segments.Count > 0; } }
+
+            private bool CheckIntersectionAndQueue(BlockPosition position) {
+                RoadPoint roadPoint;
+                if (_roadPoints.TryGetValue(position, out roadPoint) &&
+                    roadPoint.Segments.Count > 1 &&
+                    !_visited.Contains(position)) {
+                    for (int i = 0; i < roadPoint.Segments.Count; i++) {
+                        _segments.Add(roadPoint.Segments[i]);
+                    }
+                    _visited.Add(position);
+                    _todo.Push(position);
+                    return true;
+                }
+                return false;
+            }
+
+            public void Clear() {
+                _todo.Clear();
+                _visited.Clear();
+                _segments.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Stack allocated frugal string set for things which are frequently set of 1 strings.
+        /// </summary>
+        struct FrugalStringSet {
+            private object _values;
+
+            public void Add(string value) {
+                if (_values == null) {
+                    _values = value;
+                } else if (_values is string) {
+                    if (((string)_values) != value) {
+                        _values = new HashSet<string>() {
+                            (string)_values,
+                            value
+                        };
+                    }
+                } else {
+                    ((HashSet<string>)_values).Add(value);
                 }
 
-                // Then group those into sets of overlapping rectangles, following the transitive closure,
-                // this will give us each real world intersection.  This handles things like:
-                //  -----A-----|
-                //             B
-                //             |
-                //             ----------A-----
-                // Where we have two intersections, and it also handles things like:
-                //          |
-                //  ----A---B----A----
-                //          |
-                // Where A is actually represented as two individual ways.
-                Dictionary<Rect, IntersectionInfo> lists = new Dictionary<Rect, IntersectionInfo>();
-                for (int i = 0; i < rect.Count; i++) {
-                    var rectI = rect[i].Key;
-                    IntersectionInfo iList;
-                    if (!lists.TryGetValue(rectI, out iList)) {
-                        lists[rectI] = iList = new IntersectionInfo();
-                        iList.Areas.Add(rectI);
-                        iList.Segments.Add(rect[i].Value);
-                    }
-                    for (int j = i + 1; j < rect.Count; j++) {
-                        var rectJ = rect[j].Key;
-                        if (rectI.UpperLeft.X <= rectJ.BottomRight.X + 1 && rectI.BottomRight.X + 1 >= rectJ.UpperLeft.X &&
-                                rectI.UpperLeft.Z + 1 <= rectJ.BottomRight.Z && rectI.BottomRight.Z + 1 >= rectJ.UpperLeft.Z ) {
-                            iList.Areas.Add(rectJ);
-                            iList.Segments.Add(rect[j].Value);
+            }
 
-                            // we have an intersection
-                            IntersectionInfo jList;
-                            if (!lists.TryGetValue(rectJ, out jList)) {
-                                // rectJ didn't have a list, so initialize it as sharing i
-                                lists[rectJ] = iList;
-                            } else if (jList != iList) {
-                                // rectJ also already had a list, combine them into a single list.
-                                MergeLists(lists, rectJ, iList, jList);
+            public bool Empty {
+                get {
+                    return _values == null;
+                }
+            }
+
+            public string AsString() {
+                return _values as string;
+            }
+
+            public string[] ToArray() {
+                if (_values is string) {
+                    return new[] { (string)_values };
+                } else if (_values is HashSet<string>) {
+                    return ((HashSet<string>)_values).ToArray();
+                }
+                return Array.Empty<string>();
+            }
+        }
+
+        private void DrawSigns(Dictionary<BlockPosition, RoadPoint> roadPoints) {
+            List<string> names = new List<string>(4);
+            IntersectionBoundsFinder boundsFinder = new IntersectionBoundsFinder(roadPoints);
+            int cur = 0;
+            foreach (var intersection in _reader.RoadsByNode.OrderBy(x => MapOrder(_conv, x.Key))) {
+                if ((++cur % 200) == 0) {
+                    SaveBlocks();
+                }
+                if (intersection.Key.Lat == 47.6181052 &&
+                    intersection.Key.Long == -122.3041758) {
+                    Console.WriteLine("HEY!");
+                }
+                if (intersection.Value.Count > 1) { // this node represents an intersection of 2 or more ways
+                    // find the bounds of the intersecting roads...
+                    var pos = _conv.ToBlock(intersection.Key.Lat, intersection.Key.Long);
+                    boundsFinder.Clear();
+                    var x = _conv.ToBlock(47.6172547, -122.3025742);
+                    var region = boundsFinder.FindBounds(pos);
+
+                    // see if we have a special type of sign...
+                    OsmReader.SignType signType;
+                    _reader.Signs.TryGetValue(intersection.Key, out signType);
+                    if (!boundsFinder.HasSegments) {
+                        continue;
+                    }
+                    // Where can have intersections show up in different ways...  
+                    //          |
+                    //  ----A---B----A----
+                    //          |
+                    var segments = boundsFinder.Segments.ToArray();
+                    var intersectionPoint = intersection.Key;
+                    // We'll draw traffic lights if we have 4 or less roads and one of the roads
+                    // is aligned on the grid.  This handles the simple case of:
+                    //       |                                        X/
+                    //  -----+-----   and the complex case of      ---+---
+                    //       |                                       /
+                    // Here we can clearly draw the lights in the left case, in the right case we can
+                    // also draw them.  We cannot currently mix and match overhead lights and post lights
+                    // because it's pretty all or nothing - we'll end up with conflicting locations, because
+                    // we put the overhead lights across the street and extendng out, and we put the pole
+                    // lights next to the road, so they'd both want to go at location X
+                    bool drawLights = ShouldDrawOverheadLights(intersection, signType, segments);
+                    for (int i = 0; i < segments.Length; i++) {
+                        var segment = segments[i];
+                        if (segment.Way.Name == null) {
+                            continue;
+                        }
+                        int? angle = AngleFromIntersection(segment, intersectionPoint);
+                        if (angle == null) {
+                            continue;
+                        }
+
+                        Direction direction = AngleToDirection(angle.Value);
+                        names.Clear();
+                        for (int j = 0; j < segments.Length; j++) {
+                            var otherSegment = segments[j];
+
+                            if (otherSegment.Way.Name == null ||
+                                otherSegment.Way == segment.Way ||
+                                otherSegment.Way.Name == segment.Way.Name) {
+                                continue;
+                            }
+                            var otherAngle = AngleFromIntersection(otherSegment, intersectionPoint);
+                            if (otherAngle == null) {
+                                continue;
+                            }
+                            if (Math.Abs(otherAngle.Value - angle.Value) >= 180 - 45 &&
+                                Math.Abs(otherAngle.Value - angle.Value) <= 180 + 45) {
+                                // Don't sign different roads acros the street...
+                                continue;
+                            }
+                            if (drawLights &&
+                                (direction != Direction.North && direction != Direction.South && direction != Direction.East && direction != Direction.West)) {
+                                var dir2 = AngleToDirection(otherAngle.Value);
+                                direction = AlignTrafficLightDirection(direction, dir2);
+                            }
+                            // TODO: Track directions here and add arrows if we have multiple signs...
+                            if (!names.Contains(otherSegment.Way.Name)) { 
+                                names.Add(otherSegment.Way.Name);
                             }
                         }
-                    }
-                }
-                // Now go through the unique intersections...
-                foreach (var unique in lists.Values.Distinct()) {                    
-                    int top = Int32.MaxValue, left = Int32.MaxValue, bottom = 0, right = 0;
-                    foreach (var r in unique.Areas) {
-                        // now generate the signs, we generally want to generate something like this, where
-                        // the big A's and B's represent the path of the road, and the little a's and b's
-                        // represent where we want to draw the signs at.  
-                        //         bAAAAAAAAa
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //		   aAAAAAAAAb
-                        //			AAAAAAAA
-                        //			AAAAAAAA
-                        //          AAAAAAAA
-                        top = Math.Min(top, r.UpperLeft.Z);
-                        left = Math.Min(left, r.UpperLeft.X);
-                        right = Math.Max(right, r.BottomRight.X);
-                        bottom = Math.Max(bottom, r.BottomRight.Z);
-                    }
-                    OsmReader.SignType signType = OsmReader.SignType.None;
-                    double aAngleTotal = 0, bAngleTotal = 0;
-                    int angleCount = 0;
-                    foreach (var segmentIntersection in unique.Segments) {
-                        if (signType == OsmReader.SignType.None) {
-                            if (segmentIntersection.A.Start == segmentIntersection.B.Start ||
-                                segmentIntersection.A.Start == segmentIntersection.B.End) {
 
-                                if (_reader.Signs.TryGetValue(segmentIntersection.A.Start, out signType)) {
-                                    if (signType != OsmReader.SignType.Stop) {
-                                        WriteLine("Sign type is {0}", signType);
-                                    }
-                                }
-                            } else if (segmentIntersection.A.End == segmentIntersection.B.Start ||
-                                 segmentIntersection.A.End == segmentIntersection.B.End) {
-                                if (_reader.Signs.TryGetValue(segmentIntersection.A.End, out signType)) {
-                                    if (signType != OsmReader.SignType.Stop) {
-                                        WriteLine("Sign type is {0}", signType);
-                                    }
-                                }
-                            }
+                        if (names.Count == 0) {
+                            continue;
                         }
 
-                        if (roadIntersection.Key.IsSegmentFromRoadA(segmentIntersection)) {
-                            // Now determine which street is running more north/south, and which is running more east/west
-                            aAngleTotal += Math.Atan2(
-                                segmentIntersection.A.Start.Lat - segmentIntersection.A.End.Lat,
-                                segmentIntersection.A.Start.Long - segmentIntersection.A.End.Long
-                            ) * 180 / Math.PI;
-                            bAngleTotal += Math.Atan2(
-                                segmentIntersection.B.Start.Lat - segmentIntersection.B.End.Lat,
-                                segmentIntersection.B.Start.Long - segmentIntersection.B.End.Long
-                            ) * 180 / Math.PI;
+                        if (drawLights) {
+                            // We want signs facing on intersecting roads, parallel to the intersecting roads...
+                            DrawTrafficLight(roadPoints, names, segment.Way, pos, angle.Value, direction);
                         } else {
-                            bAngleTotal += Math.Atan2(
-                                segmentIntersection.A.Start.Lat - segmentIntersection.A.End.Lat,
-                                segmentIntersection.A.Start.Long - segmentIntersection.A.End.Long
-                            ) * 180 / Math.PI;
-                            aAngleTotal += Math.Atan2(
-                                segmentIntersection.B.Start.Lat - segmentIntersection.B.End.Lat,
-                                segmentIntersection.B.Start.Long - segmentIntersection.B.End.Long
-                            ) * 180 / Math.PI;
+                            DrawRoadSign(signType, names, roadPoints, pos, angle.Value, segment.Way);
                         }
-                        angleCount++;
-                    }
-
-                    aAngleTotal /= angleCount;
-                    bAngleTotal /= angleCount;
-                    bool drawRight = false, drawUpper = false, drawBottom = false, drawLeft = false;
-                    OsmReader.Way a, b;
-                    if ((bAngleTotal > -45 && bAngleTotal < 45) || bAngleTotal > 135 || bAngleTotal < -135) {
-                        a = roadIntersection.Key.A;
-                        b = roadIntersection.Key.B;
-                    } else {
-                        a = roadIntersection.Key.B;
-                        b = roadIntersection.Key.A;
-                    }
-
-                    aName.Clear();
-                    bName.Clear();
-
-                    AddSignName(aName, a.Name);
-                    AddSignName(bName, b.Name);
-
-                    List<BlockPosition> xx = new List<BlockPosition>();
-                    foreach (var x in roadPoints.Keys) {
-                        if (x.X == left -1 ) {
-                            xx.Add(x);
-                        }
-                    }
-                    
-                    for (var start = left; start < right; start++) {
-                        RoadPoint rp;
-                        if (!drawBottom && roadPoints.TryGetValue(new BlockPosition(start, top - 1), out rp)) {
-                            if (rp.Segment.Way == a || rp.Segment.Way.Name == a.Name) {
-                                drawBottom = true;
-                            }
-                        }
-                        if (!drawUpper && roadPoints.TryGetValue(new BlockPosition(start, bottom + 1), out rp)) {
-                            if (rp.Segment.Way == a || rp.Segment.Way.Name == a.Name) {
-                                drawUpper = true;
-                            }
-                        }
-
-                        if (drawBottom && drawUpper) {
-                            break;
-                        }
-                    }
-
-                    for (var start = top; start < bottom; start++) {
-                        RoadPoint rp;
-                        if (roadPoints.TryGetValue(new BlockPosition(left - 1, start), out rp)) {
-                            if (!drawRight && rp.Segment.Way == b || rp.Segment.Way.Name == b.Name) {
-                                drawRight = true;
-                            }
-                        }
-                        if (roadPoints.TryGetValue(new BlockPosition(right + 1, start), out rp)) {
-                            if (!drawLeft && rp.Segment.Way == b || rp.Segment.Way.Name == b.Name) {
-                                drawLeft = true;
-                            }
-                        }
-
-                        if (drawLeft && drawRight) {
-                            break;
-                        }
-                    }
-
-                    if (signType == OsmReader.SignType.TrafficSignal) {
-                        // Traffic lights are different than simple signs...  For a simple sign we display
-                        // the name of the street on the right hand side before you enter the intersection.
-                        // For a traffic light we dispaly it on the opposite side of the street, extending
-                        // from the right hand side.
-                        //         aAAAAAAAAb
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
-                        //		   bAAAAAAAAa
-                        //			AAAAAAAA
-                        //			AAAAAAAA
-                        //          AAAAAAAA
-
-
-                        if (drawBottom) {
-                            var pos = new BlockPosition(left- 1, bottom + 1);
-                            RoadPoint pr;
-                            while (roadPoints.TryGetValue(pos, out pr) && pr.Segment.Way == b) {
-                                pos = new BlockPosition(pos.X, pos.Z + 1);
-                            }
-                            DrawTrafficLight(
-                                bName,
-                                GetSignNonRoadPoint(roadPoints, pos.X, pos.Z, Direction.North),
-                                Direction.East,
-                                GetNumberOfTrafficLights(roadIntersection.Key.A),
-                                roadIntersection.Key.A.Sidewalk != OsmReader.Sidewalk.None
-                            );
-                        }
-                        if (drawUpper) {
-                            var pos = new BlockPosition(right + 1, top - 1);
-                            RoadPoint pr;
-                            while (roadPoints.TryGetValue(pos, out pr) && pr.Segment.Way == b) {
-                                pos = new BlockPosition(pos.X, pos.Z - 1);
-                            }
-                            DrawTrafficLight(bName, GetSignNonRoadPoint(roadPoints, pos.X, pos.Z, Direction.South), Direction.West, GetNumberOfTrafficLights(roadIntersection.Key.A), roadIntersection.Key.A.Sidewalk != OsmReader.Sidewalk.None);
-                        }
-                        if (drawRight) {
-                            var pos = new BlockPosition(right + 1, bottom + 1);
-                            RoadPoint pr;
-                            while (roadPoints.TryGetValue(pos, out pr) && pr.Segment.Way == a) {
-                                pos = new BlockPosition(pos.X + 1, pos.Z);
-                            }
-                            DrawTrafficLight(aName, GetSignNonRoadPoint(roadPoints, pos.X, pos.Z, Direction.East), Direction.North, GetNumberOfTrafficLights(roadIntersection.Key.B), roadIntersection.Key.B.Sidewalk != OsmReader.Sidewalk.None);
-                        }
-                        if (drawLeft) {
-                            var pos = new BlockPosition(left - 1, top - 1);
-                            RoadPoint pr;
-                            while (roadPoints.TryGetValue(pos, out pr) && pr.Segment.Way == a) {
-                                pos = new BlockPosition(pos.X - 1, pos.Z);
-                            }
-                            DrawTrafficLight(aName, GetSignNonRoadPoint(roadPoints, pos.X, pos.Z, Direction.West), Direction.South, GetNumberOfTrafficLights(roadIntersection.Key.B), roadIntersection.Key.B.Sidewalk != OsmReader.Sidewalk.None);
-                        }
-                    } else {
-                        DrawRoadSign(signType, bName, roadPoints, left - 1, top - 1, Direction.North);
-                        DrawRoadSign(signType, bName, roadPoints, right + 1, bottom + 1, Direction.South);
-                        DrawRoadSign(signType, aName, roadPoints, right + 1, top - 1, Direction.East);
-                        DrawRoadSign(signType, aName, roadPoints, left - 1, bottom + 1, Direction.West);
                     }
                 }
             }
-            intersections.Clear();
+        }
+
+        private static bool ShouldDrawOverheadLights(KeyValuePair<OsmReader.Node, List<OsmReader.Way>> intersection, OsmReader.SignType signType, RoadSegment[] segments) {
+            bool drawLights = signType == OsmReader.SignType.TrafficSignal && segments.Length <= 4;
+            if (drawLights) {
+                for (int i = 0; i < segments.Length; i++) {
+                    var segment = segments[i];
+                    Direction? direction = DirectionFromIntersection(segment, intersection.Key);
+                    if (direction == null) {
+                        continue;
+                    }
+                    if (!(direction == Direction.North || direction == Direction.South || direction == Direction.East || direction == Direction.West)) {
+                        drawLights = false;
+                        break;
+                    }
+                }
+            }
+
+            return drawLights;
+        }
+
+        private static Direction AlignTrafficLightDirection(Direction direction, Direction dir2) {
+            switch (direction) {
+                case Direction.NorthEast:
+                    if (dir2 == Direction.North || dir2 == Direction.South) {
+                        direction = Direction.East;
+                    } else {
+                        direction = Direction.North;
+                    }
+                    break;
+                case Direction.SouthEast:
+                    if (dir2 == Direction.North || dir2 == Direction.South) {
+                        direction = Direction.East;
+                    } else {
+                        direction = Direction.South;
+                    }
+                    break;
+                case Direction.NorthWest:
+                    if (dir2 == Direction.North || dir2 == Direction.South) {
+                        direction = Direction.West;
+                    } else {
+                        direction = Direction.North;
+                    }
+                    break;
+                case Direction.SouthWest:
+                    if (dir2 == Direction.North || dir2 == Direction.South) {
+                        direction = Direction.West;
+                    } else {
+                        direction = Direction.South;
+                    }
+                    break;
+                case Direction.EastNorthEast:
+                case Direction.EastSouthEast:
+                    direction = Direction.East;
+                    break;
+                case Direction.NorthNorthWest:
+                case Direction.NorthNorthEast:
+                    direction = Direction.North;
+                    break;
+                case Direction.SouthSouthWest:
+                case Direction.SouthSouthEast:
+                    direction = Direction.South;
+                    break;
+                case Direction.WestNorthWest:
+                case Direction.WestSouthWest:
+                    direction = Direction.West;
+                    break;
+            }
+
+            return direction;
+        }
+
+        private void DrawTrafficLight(Dictionary<BlockPosition, RoadPoint> roadPoints, List<string> names, OsmReader.Way way, BlockPosition intersection, int angle, Direction direction) {
+            Direction lightDir = Direction.East, walkBackDir;
+            switch (direction) {
+                case Direction.North:
+                    lightDir = Direction.East;
+                    walkBackDir = Direction.West;
+                    break;
+                case Direction.South:
+                    lightDir = Direction.West;
+                    walkBackDir = Direction.East;
+                    break;
+                case Direction.East:
+                    lightDir = Direction.South;
+                    walkBackDir = Direction.North;
+                    break;
+                case Direction.West:
+                    lightDir = Direction.North;
+                    walkBackDir = Direction.South;
+                    break;
+                default:
+                    throw new InvalidOperationException();
+            }
+            var location = GetSignNonRoadPoint(roadPoints, intersection, angle + 90, walkBackDir);
+            if (location == null) {
+                return;
+            }
+            DrawTrafficLight(
+                names,
+                location.Value,
+                lightDir,
+                GetNumberOfTrafficLights(way),
+                way.Sidewalk != OsmReader.Sidewalk.None
+            );
+        }
+
+        private static Direction? DirectionFromIntersection(RoadSegment segment, OsmReader.Node intersectionPoint) {
+            var angle = AngleFromIntersection(segment, intersectionPoint);
+            if (angle != null) {
+                return AngleToDirection(angle.Value);
+            }
+            return null;
+        }
+
+        private static int? AngleFromIntersection(RoadSegment segment, OsmReader.Node intersectionPoint) {
+            OsmReader.Node other = GetNonIntersectionPoint(segment, intersectionPoint);
+            if (other != null) {
+                return GetAngleRelativeToIntersection(intersectionPoint, other);
+            }
+            return null;
+        }
+
+        private static OsmReader.Node GetNonIntersectionPoint(RoadSegment segment, OsmReader.Node intersectionPoint) {
+            OsmReader.Node other;
+            if (segment.Start == intersectionPoint) {
+                other = segment.End;
+            } else if (segment.End == intersectionPoint) {
+                other = segment.Start;
+            } else {
+                //WriteLine("Weird intersecting road not at intersection: {0}", segment.Way.Name, segment.Start, segment.End);
+                other = null;
+            }
+
+            return other;
+        }
+
+        private static Direction AngleToDirection(int angle) {
+            Direction direction;
+            var angleQuadrant = (int)((angle + 360 / 32) / 22.5) % 16; //16 - (((angle + 45 / 4) * 2 / 45 * 4) % 16);
+            switch (angleQuadrant) {
+                case 0: direction = Direction.East; break;
+                case 1: direction = Direction.EastNorthEast; break;
+                case 2: direction = Direction.NorthEast; break;
+                case 3: direction = Direction.NorthNorthEast; break;
+                case 4: direction = Direction.North; break;
+                case 5: direction = Direction.NorthNorthWest; break;
+                case 6: direction = Direction.NorthWest; break;
+                case 7: direction = Direction.WestNorthWest; break;
+                case 8: direction = Direction.West; break;
+                case 9: direction = Direction.WestSouthWest; break;
+                case 10: direction = Direction.SouthWest; break;
+                case 11: direction = Direction.SouthSouthWest; break;
+                case 12: direction = Direction.South; break;
+                case 13: direction = Direction.EastSouthEast; break;
+                case 14: direction = Direction.SouthEast; break;
+                case 15: direction = Direction.SouthSouthEast; break;
+                default: throw new InvalidOperationException();
+            }
+
+            return direction;
+        }
+
+        private static int GetAngleRelativeToIntersection(KeyValuePair<OsmReader.Node, List<OsmReader.Way>> intersection, OsmReader.Node other) {
+            // get the angle of the segment relative to the intersection, the angle will be:
+            //      0 if road runs east from the intersection
+            //      90 if roads south from intersection
+            //      180 if road runs west from the intersection
+            //      270 if the road runs north from the intersection
+            var angle = (int)(Math.Atan2(
+                other.Lat - intersection.Key.Lat,
+                other.Long - intersection.Key.Long
+            ) * 180 / Math.PI);
+            while (angle < 0) {
+                angle += 360;
+            }
+            while (angle >= 360) {
+                angle -= 360;
+            }
+
+            return angle;
+        }
+
+        private static int GetAngleRelativeToIntersection(OsmReader.Node intersection, OsmReader.Node other) {
+            // get the angle of the segment relative to the intersection, the angle will be:
+            //      0 if road runs east from the intersection
+            //      90 if roads south from intersection
+            //      180 if road runs west from the intersection
+            //      270 if the road runs north from the intersection
+            var angle = (int)(Math.Atan2(
+                other.Lat - intersection.Lat,
+                other.Long - intersection.Long
+            ) * 180 / Math.PI);
+            while (angle < 0) {
+                angle += 360;
+            }
+            while (angle >= 360) {
+                angle -= 360;
+            }
+
+            return angle;
+        }
+
+        private void DrawRoadSign(OsmReader.SignType signType, List<string> name, Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition intersection, int angle, OsmReader.Way way) {
+            Direction direction = AngleToDirection(angle);
+
+            var target =  GetSignNonRoadPoint(roadPoints, intersection, angle, direction);
+            if (target == null) {
+                return;
+            }
+
+            switch (signType) {
+                case OsmReader.SignType.TrafficSignal:
+                case OsmReader.SignType.Stop:
+                    DrawTrafficSign(signType, name, direction, target.Value);
+                    break;
+                default:
+                    DrawSimpleSign(name, direction, target.Value);
+                    break;
+            }
+        }
+
+        private static BlockPosition? GetSignNonRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition intersection, int angle, Direction direction) {
+            BlockPosition target;
+            double adjAngle = ((double)angle + 20) / 180 * Math.PI;
+            var destX = (int)(intersection.X + Math.Cos(adjAngle) * 100);
+            var destZ = (int)(intersection.Z - Math.Sin(adjAngle) * 100);
+
+            target = intersection;
+            foreach (var point in PlotLineOrdered(intersection.X, intersection.Z, destX, destZ)) {
+                if (!roadPoints.ContainsKey(point.Block)) {
+                    target = point.Block;
+                    break;
+                }
+            }
+            if (target.Equals(intersection)) {
+                return null;
+            }
+
+            switch (direction) {
+                case Direction.EastNorthEast:
+                case Direction.NorthNorthEast:
+                case Direction.NorthEast:
+                case Direction.East:
+                    target = WalkBackPoint(roadPoints, -1, 1, target);
+                    break;
+                case Direction.SouthSouthEast:
+                case Direction.EastSouthEast:
+                case Direction.South:
+                case Direction.SouthEast:
+                    target = WalkBackPoint(roadPoints, -1, -1, target);
+                    break;
+                case Direction.WestNorthWest:
+                case Direction.NorthNorthWest:
+                case Direction.NorthWest:
+                case Direction.North:
+                    target = WalkBackPoint(roadPoints, 1, 1, target);
+                    break;
+                case Direction.WestSouthWest:
+                case Direction.SouthSouthWest:
+                case Direction.West:
+                case Direction.SouthWest:
+                    target = WalkBackPoint(roadPoints, 1, -1, target);
+                    break;
+                default:
+                    throw new ArgumentException(nameof(direction));
+            }
+            return target;
         }
 
         private static void MergeLists(Dictionary<Rect, IntersectionInfo> lists, Rect removing, IntersectionInfo existing, IntersectionInfo other) {
@@ -1553,34 +1764,6 @@ namespace MinecraftMapper {
             return (way.Lanes ?? 2) / 2;
         }
 
-        private void DrawRoadSign(OsmReader.SignType signType, List<string> name, Dictionary<BlockPosition, RoadPoint> roadPoints, int x, int z, Direction direction) {
-            BlockPosition target = GetSignNonRoadPoint(roadPoints, x, z, direction);
-
-            switch (signType) {
-                case OsmReader.SignType.TrafficSignal:
-                case OsmReader.SignType.Stop:
-                    DrawTrafficSign(signType, name, direction, target);
-                    break;
-                default:
-                    DrawSimpleSign(name, direction, target);
-                    break;
-            }
-        }
-
-        private static BlockPosition GetSignNonRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, int x, int z, Direction direction) {
-            BlockPosition target;
-            switch (direction) {
-                case Direction.West: target = FindNonRoadPoint(roadPoints, 0, 1, new BlockPosition(x, z)); break;
-                case Direction.East: target = FindNonRoadPoint(roadPoints, 0, -1, new BlockPosition(x, z)); break;
-                case Direction.North: target = FindNonRoadPoint(roadPoints, -1, 0, new BlockPosition(x, z)); break;
-                case Direction.South: target = FindNonRoadPoint(roadPoints, 1, 0, new BlockPosition(x, z)); break;
-                default:
-                    throw new ArgumentException(nameof(direction));
-            }
-
-            return target;
-        }
-
         private void DrawSimpleSign(List<string> name, Direction direction, BlockPosition target) {
             var height = _bm.GetHeight(target.X, target.Z);
             var block = new AlphaBlock(BlockType.SIGN_POST);
@@ -1601,42 +1784,64 @@ namespace MinecraftMapper {
                 _bm.SetID(target.X, height + i, target.Z, BlockType.COBBLESTONE_WALL);
                 _bm.SetData(target.X, height + i, target.Z, 0);
             }
-            AlphaBlock block = new AlphaBlock(BlockType.WALL_SIGN);
+
+            AlphaBlock block;
+            if (direction == Direction.North || direction == Direction.South || direction == Direction.East || direction == Direction.West) {
+                block = new AlphaBlock(BlockType.WALL_SIGN);
+            } else {
+                block = new AlphaBlock(BlockType.SIGN_POST);
+            }
             var ent = block.GetTileEntity() as TileEntitySign;
             SetSignName(name, ent);
             int signX = target.X, signZ = target.Z;
             switch (direction) {
+                case Direction.NorthWest: signX--; signZ--; break;
+                case Direction.WestSouthWest:
+                case Direction.WestNorthWest:
                 case Direction.West: signX--; break;
+                case Direction.NorthEast: signX++; signZ--; break;
+                case Direction.EastNorthEast:
+                case Direction.EastSouthEast:
                 case Direction.East: signX++; break;
+                case Direction.SouthEast: signX++; signZ++; break;
+                case Direction.SouthSouthWest:
+                case Direction.SouthSouthEast:
                 case Direction.South: signZ++; break;
+                case Direction.SouthWest: signX--; signZ++; break;
+                case Direction.NorthNorthWest:
+                case Direction.NorthNorthEast:
                 case Direction.North: signZ--; break;
             }
             if (_conv.IsValidPoint(target)) {
-                _bm.SetBlock(signX, height + 2, signZ, block);
-                int data;
-                switch (direction) {
-                    case Direction.North: data = 2; break;
-                    case Direction.South: data = 3; break;
-                    case Direction.West: data = 4; break;
-                    case Direction.East: data = 5; break;
-                    default:
-                        throw new InvalidOperationException();
+                if (direction == Direction.North || direction == Direction.South || direction == Direction.East || direction == Direction.West) {
+                    int data;
+                    switch (direction) {
+                        case Direction.North: data = 2; break;
+                        case Direction.South: data = 3; break;
+                        case Direction.West: data = 4; break;
+                        case Direction.East: data = 5; break;
+                        default:
+                            throw new InvalidOperationException();
+                    }
+                    _bm.SetBlock(signX, height + 2, signZ, block);
+                    _bm.SetData(signX, height + 2, signZ, data);
+                } else {
+                    var signHeight = _bm.GetHeight(signX, signZ);
+                    _bm.SetBlock(signX, signHeight, signZ, block);
+                    _bm.SetData(signX, signHeight, signZ, (int)direction);
                 }
-                _bm.SetData(signX, height + 2, signZ, data);
             }
 
             AlphaBlock bannerBlock = new AlphaBlock(BlockType.STANDING_BANNER);
             var bannerEnt = bannerBlock.GetTileEntity() as TileEntityBanner;
-            if (signType == OsmReader.SignType.Stop) {  
-                //bannerEnt.BaseColor = BannerColor.Red;
-                //bannerEnt.Patterns = new BannerPattern[0];
+            if (signType == OsmReader.SignType.Stop) {
                 bannerEnt.BaseColor = BannerColor.LightGray;
                 bannerEnt.Patterns = new BannerPattern[] {
                             new BannerPattern(BannerColor.Red, BannerStyles.MiddleRectangle),
                             new BannerPattern(BannerColor.LightGray, BannerStyles.TopStripe),
                             new BannerPattern(BannerColor.LightGray, BannerStyles.BottomStripe),
                             new BannerPattern(BannerColor.LightGray, BannerStyles.Border),
-                        };  
+                        };
             } else {
                 bannerEnt.BaseColor = BannerColor.LightGray;
                 bannerEnt.Patterns = new BannerPattern[] {
@@ -1661,13 +1866,13 @@ namespace MinecraftMapper {
             // overlapping armor stand to look like cross walk buttons.
             var entities = _bm.GetChunk(target.X, height, target.Z).Entities;
             var armor = new TypedEntity("minecraft:armor_stand");
-            armor.Position = new Vector3() { X = target.X + .5, Y = height, Z = target.Z + .5};
+            armor.Position = new Vector3() { X = target.X + .5, Y = height, Z = target.Z + .5 };
             armor.IsOnGround = true;
             _bm.SetID(target.X, height, target.Z, BlockType.STONE);
             _bm.SetData(target.X, height, target.Z, (int)StoneType.POLISHED_ANDESITE);
             _bm.SetID(target.X, height + 1, target.Z, BlockType.ANVIL);
             _bm.SetData(target.X, height + 1, target.Z, 1);
-            if (direction == Direction.North || direction == Direction.South) {                
+            if (direction == Direction.North || direction == Direction.South) {
                 armor.Rotation = new Orientation() { Yaw = Math.PI / 2 };
             }
             entities.Add(armor);
@@ -1680,16 +1885,16 @@ namespace MinecraftMapper {
             // which we derive our other directions...
             int xDelta = 0, zDelta = 0;
             switch (direction) {
-                case Direction.West: xDelta = -1;break;
-                case Direction.South: zDelta = 1;break;
-                case Direction.North:zDelta = -1; break;
+                case Direction.West: xDelta = -1; break;
+                case Direction.South: zDelta = 1; break;
+                case Direction.North: zDelta = -1; break;
                 case Direction.East: xDelta = 1; break;
                 default: throw new NotImplementedException();
             }
 
             // draw the 1st three cobble stone horizontal pieces
             int xLoc = target.X + xDelta, zLoc = target.Z + zDelta;
-            int initialLength = 3;
+            int initialLength = 1;
             if (sidewalk) {
                 initialLength += 3;
             }
@@ -1704,7 +1909,7 @@ namespace MinecraftMapper {
                 // Draw the traffic light...
                 for (int i = 0; i < 2; i++) {
                     _bm.SetID(xLoc, height + TrafficLightHeight - 1 - i, zLoc, BlockType.WOOL);
-                    _bm.SetData(xLoc, height + TrafficLightHeight - 1 - i, zLoc, (int)WoolColor.BLACK); 
+                    _bm.SetData(xLoc, height + TrafficLightHeight - 1 - i, zLoc, (int)WoolColor.BLACK);
                 }
 
                 AlphaBlock bannerBlock = new AlphaBlock(BlockType.WALL_BANNER);
@@ -1728,7 +1933,11 @@ namespace MinecraftMapper {
                 zLoc += zDelta;
 
                 // draw three more horizontal pieces
-                for (int i = 0; i < 3; i++) {
+                int horizontalLength = 3;
+                if (lane != lanes - 1 && lane != 0) {
+                    horizontalLength = 2;
+                }
+                for (int i = 0; i < horizontalLength; i++) {
                     _bm.SetID(xLoc, height + TrafficLightHeight - 1, zLoc, BlockType.COBBLESTONE_WALL);
                     _bm.SetData(xLoc, height + TrafficLightHeight - 1, zLoc, 0);
                     xLoc += xDelta;
@@ -1763,17 +1972,33 @@ namespace MinecraftMapper {
             }
         }
 
-        private static BlockPosition FindNonRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, int xDir, int yDir, BlockPosition target) {
+        private static BlockPosition WalkBackPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, int inX, int inZ, BlockPosition target) {
+            var cur = target;
             int count = 0;
-            while (roadPoints.ContainsKey(target) && count++ < 25) {
-                target = new BlockPosition(target.X + xDir, target.Z + yDir);
-            }
 
-            return target;
+            // Now try and move back close to the road, handling each direction one by one...
+            count = 0;
+            BlockPosition next = cur;
+            bool moved;
+            do {
+                moved = false;
+                if (!roadPoints.ContainsKey(new BlockPosition(next.X + inX, next.Z))) {
+                    next = new BlockPosition(next.X + inX, next.Z);
+                    moved = true;
+                }
+                if (!roadPoints.ContainsKey(new BlockPosition(next.X, next.Z + inZ))) {
+                    next = new BlockPosition(next.X, next.Z + inZ);
+                    moved = true;
+                }
+            } while (moved && ++count < 100);
+            if (count == 100) {
+                return cur;
+            }
+            return next;
         }
 
         private static int GetRoadWidth(OsmReader.Way way) {
-            return (way.Lanes ?? 2) * 6;
+            return (way.Lanes ?? 2) * 4;
         }
 
         struct Point {
@@ -1959,7 +2184,9 @@ namespace MinecraftMapper {
         }
 
         static IEnumerable<LinePosition> PlotLine(int x0, int y0, int x1, int y1, int width = 1) {
-            if (Math.Abs(y1 - y0) < Math.Abs(x1 - x0)) {
+            var xDelta = Math.Abs(x0 - x1);
+            var yDelta = Math.Abs(y0 - y1);
+            if (yDelta < xDelta) {
                 if (x0 > x1) {
                     return PlotLineLow(x1, y1, x0, y0, width);
                 } else {
@@ -1971,57 +2198,145 @@ namespace MinecraftMapper {
             return PlotLineHigh(x0, y0, x1, y1, width);
         }
 
-        static IEnumerable<LinePosition> PlotLineHigh(int x0, int y0, int x1, int y1, int width = 1) {
+        static IEnumerable<LinePosition> PlotLineOrdered(int x0, int y0, int x1, int y1, int width = 1) {
+            var xDelta = Math.Abs(x0 - x1);
+            var yDelta = Math.Abs(y0 - y1);
+            if (yDelta < xDelta) {
+                if (x0 > x1) {
+                    return PlotLineLow(x1, y1, x0, y0, width).Reverse();
+                } else {
+                    return PlotLineLow(x0, y0, x1, y1, width);
+                }
+            } else if (y0 > y1) {
+                return PlotLineHigh(x1, y1, x0, y0, width).Reverse();
+            }
+            return PlotLineHigh(x0, y0, x1, y1, width);
+        }
+
+        static IEnumerable<LinePosition> PlotLineHigh(int x0, int y0, int x1, int y1, int width = 1, bool overlap = false, int index = 0) {
             int dx = x1 - x0;
             int dy = y1 - y0;
             int xi = 1;
+            int startFixUp = width / 2;
             if (dx < 0) {
                 xi = -1;
                 dx = -dx;
+            } else {
+                startFixUp = (width - 1) - (width / 2);
             }
-            int D = 2 * dx - dy;
+            int D = 2 * dy - dx;
+            // fix up our start point so that we're centering on thickness...
+            for (int i = 0; i < width / 2; i++) {
+                x0--;
+                x1--;
+                if (D >= 0) {
+                    y0 += xi;
+                    y1 += xi;
+                    D -= dx * 2;
+                }
+                D += dy * 2;
+            }
+            D = 2 * dx - dy;
             int x = x0;
+
             for (int y = y0; y <= y1; y++) {
-                int end = width / 2;
-                if ((width & 0x01) != 0) {
-                    end++;
-                }
-                for (int i = -width / 2; i < end; i++) {
-                    if (x + 1 >= 0) {
-                        yield return new LinePosition(new BlockPosition(x + i, y), i - (-width / 2), y);
+                yield return new LinePosition(new BlockPosition(x, y), index, y);
+                if (D >= 0) {
+                    if (overlap) {
+                        if (xi == -1) {
+                            yield return new LinePosition(new BlockPosition(x - 1, y), index, y);
+                        } else {
+                            yield return new LinePosition(new BlockPosition(x, y + 1), index, y);
+                        }
                     }
-                }
-                if (D > 0) {
                     x = x + xi;
                     D -= 2 * dy;
                 }
                 D += 2 * dx;
             }
+
+            // then draw the additional lines...
+            D = 2 * dy - dx;
+            if (width != 1) {
+                for (int i = 1; i < width; i++) {
+                    x0++;
+                    x1++;
+                    bool drawOverlap = false;
+                    if (D >= 0) {
+                        y0-=xi;
+                        y1-=xi;
+                        D -= 2 * dx;
+                        drawOverlap = true;
+                    }
+                    D += 2 * dy;
+                    foreach (var value in PlotLineHigh(x0, y0, x1, y1, 1, drawOverlap, i)) {
+                        yield return value;
+                    }
+                }
+            }
         }
 
-        static IEnumerable<LinePosition> PlotLineLow(int x0, int y0, int x1, int y1, int width = 1) {
+        static IEnumerable<LinePosition> PlotLineLow(int x0, int y0, int x1, int y1, int width = 1, bool overlap = false, int index = 0) {
             int dx = x1 - x0;
             int dy = y1 - y0;
             int yi = 1;
+            int startFixUp = width / 2;
             if (dy < 0) {
                 yi = -1;
                 dy = -dy;
+            } else {
+                startFixUp = (width - 1) - (width / 2);
             }
-            int D = 2 * dy - dx;
+            int D = 2 * dx - dy;
+            // fix up our start point so that we're centering on thickness...
+            for (int i = 0; i < startFixUp; i++) {
+                y0--;
+                y1--;
+                if (D >= 0) {
+                    x0 += yi;
+                    x1 += yi;
+                    D -= dy * 2;
+                }
+                D += dx * 2;
+            }
+
+            // then draw the line...
             int y = y0;
+            D = 2 * dy - dx;
             for (int x = x0; x <= x1; x++) {
-                int end = width / 2;
-                if ((width & 0x01) != 0) {
-                    end++;
-                }
-                for (int i = -width / 2; i < end; i++) {
-                    yield return new LinePosition(new BlockPosition(x, y + i), i - (-width / 2), x);
-                }
-                if (D > 0) {
+                yield return new LinePosition(new BlockPosition(x, y), index, x);
+                if (D >= 0) {
+                    if (overlap) {
+                        if (yi == -1) {
+                            yield return new LinePosition(new BlockPosition(x, y - 1), index, x);
+                        } else {
+                            yield return new LinePosition(new BlockPosition(x + 1, y), index, x);
+                        }
+                    }
                     y = y + yi;
                     D -= 2 * dx;
                 }
                 D += 2 * dy;
+            }
+
+            // then draw the additional lines...
+            D = 2 * dx - dy;
+            if (width != 1) {
+                for (int i = 1; i < width; i++) {
+                    y0++;
+                    y1++;
+                    bool drawOverlap = false;
+                    if (D >= 0) {
+                        x0 -= yi;
+                        x1 -= yi;
+                        D -= 2 * dy;
+                        drawOverlap = true;
+                    }
+                    D += 2 * dx;
+                    foreach (var value in PlotLineLow(x0, y0, x1, y1, 1, drawOverlap, i)) {
+                        yield return value;
+                    }
+                }
             }
         }
     }

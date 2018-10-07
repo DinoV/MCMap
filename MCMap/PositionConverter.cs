@@ -19,7 +19,7 @@ namespace MinecraftMapper {
             _positions = positions;
         }
 
-        public bool IsValidPoint(BlockPosition point) {
+        public bool IsValidPoint(BlockPosition point)   {
             //return point.X >= 0 && point.Z >= 0 && point.X < 10688 && point.Z < 22500;
             return point.X >= 0 && point.Z >= 0 && point.X < _worldWidth && point.Z < _worldHeight;
         }
