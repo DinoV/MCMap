@@ -38,20 +38,70 @@ namespace MinecraftMapper {
             public override string ToString() {
                 return string.Format("{0},{1}", Lat, Long);
             }
+
+            public virtual string[] Description {
+                get {
+                    return null;
+                }
+            }
         }
 
-        public class SeattleNode : Node {
+        public class AddressNode : Node {
             public readonly string HouseNumber, Street, Name;
-            public long NodeNumber;
-            public SeattleNode(double lat, double lng, long nodeNumber, string name, string houseNumber, string street, int? stories) : base(lat, lng) {
+
+            public AddressNode(double lat, double lng, string name, string houseNumber, string street, int? stories) : base(lat, lng) {
                 HouseNumber = houseNumber;
                 Name = name;
                 Street = street;
-                NodeNumber = nodeNumber;
             }
 
             public override string ToString() {
                 return string.Format("{0},{1} {2} {3}", Lat, Long, HouseNumber, Street);
+            }
+
+            public override string[] Description {
+                get {
+                    return new[] { Name, HouseNumber };
+                }
+            }
+        }
+
+        public class AmenityNode : AddressNode {
+            public readonly Amenity Amenity;
+          
+            public AmenityNode(double lat, double lng, Amenity amenity, string name, string houseNumber, string street, int? stories) : 
+                base(lat, lng, name, houseNumber, street, stories) {
+                this.Amenity = amenity;
+            }
+
+            public override string ToString() {
+                return $"Amenity({Amenity}): " + base.ToString();
+            }
+
+            public override string[] Description {
+                get {
+                    return new[] { Name, HouseNumber };
+                }
+            }
+        }
+
+        public class ShopNode : Node {
+            private Shop Shop;
+            private string Name;
+
+            public ShopNode(double lat, double lng, Shop shop, string name) : base(lat, lng) {
+                this.Shop = shop;
+                this.Name = name;
+            }
+
+            public override string ToString() {
+                return $"Shop({Shop}): " + base.ToString();
+            }
+
+            public override string[] Description {
+                get {
+                    return new[] { Name };
+                }
             }
         }
 
@@ -98,6 +148,26 @@ namespace MinecraftMapper {
             Retail,
             Industrial,
             Office
+        }
+
+        public enum Shop {
+            None,
+            Lingerie,
+            Shoes,
+            Bag,
+            Clothes,
+            Wine,
+            Boutique,
+            Beauty,
+            Bicycle,
+            Bakery,
+            HairDresser,
+            CarRepair,
+            Stationary,
+            Convenience,
+            VarietyStore,
+            Jewelery,
+            Razors,
         }
 
         public enum Amenity {
@@ -190,37 +260,39 @@ namespace MinecraftMapper {
             }
         }
 
+        public class BuildingItem {
+
+        }
         public class Building {
             public readonly string HouseNumber, Street, Name;
-            public readonly Node[] Nodes;
+            public readonly Node[] BuildingNodes;
             public readonly Amenity Amenity;
             public float? Stories;
-            public double? PrimaryLat;
-            public double? PrimaryLong;
             public readonly Material Material;
+            public readonly Color? Color;
             public readonly RoofInfo Roof;
+            public readonly long Id;
+            public List<Node> SignItems;
 
-            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, RoofInfo roofInfo, Node[] nodes) {
+            public Building(long id, string name, string houseNumber, string street, Amenity amenity, Material material, Color? color, RoofInfo roofInfo, Node[] nodes) {
                 Name = name;
+                Id = id;
                 HouseNumber = houseNumber;
                 Street = street;
                 Amenity = amenity;
-                Nodes = nodes;
+                BuildingNodes = nodes;
                 Material = material;
+                Color = color;
                 Roof = roofInfo;
             }
 
-            public Building(string name, string houseNumber, string street, Amenity amenity, Material material, double lat, double longitude, RoofInfo roofInfo, Node[] nodes) {
-                Name = name;
-                HouseNumber = houseNumber;
-                Street = street;
-                Amenity = amenity;
-                Material = material;
-                PrimaryLat = lat;
-                PrimaryLong = longitude;
-                Roof = roofInfo;
-                Nodes = nodes;
+            public void AddItem(Node item) {
+                if (SignItems == null) {
+                    SignItems = new List<Node>();
+                }
+                SignItems.Add(item);
             }
+
         }
 
         // https://stackoverflow.com/questions/17789271/get-xelement-attribute-value
@@ -241,7 +313,7 @@ namespace MinecraftMapper {
 
         public void ReadData() {
             var allNodes = new Dictionary<long, Node>();
-            RankedDictionary<double, RankedDictionary<double, SeattleNode>> orderedNodes = new RankedDictionary<double, RankedDictionary<double, SeattleNode>>();
+            RankedDictionary<double, RankedDictionary<double, Node>> orderedNodes = new RankedDictionary<double, RankedDictionary<double, Node>>();
 
             var reader = XmlReader.Create(new FileStream(_sourceXml, FileMode.Open));
             HashSet<string> nodeNames = new HashSet<string>() {
@@ -263,16 +335,29 @@ namespace MinecraftMapper {
                             }
                         }
                         Node newNode;
-                        if (tags.houseNumber != null && tags.street != null) {
-                            RankedDictionary<double, SeattleNode> longNodes;
-                            if (!orderedNodes.TryGetValue(lat, out longNodes)) {
-                                longNodes = orderedNodes[lat] = new RankedDictionary<double, SeattleNode>();
-                            }
-                            allNodes[id] = newNode = longNodes[longitude] = new SeattleNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories);
+                        bool includeInOrder = false;
+                        if (tags.amenity != Amenity.None) {
+                            includeInOrder = true;
+                            newNode = new AmenityNode(lat, longitude, tags.amenity, tags.name, tags.houseNumber, tags.street, tags.stories);
+                        } else if (tags.houseNumber != null && tags.street != null) {
+                            includeInOrder = true;
+                            newNode = new AddressNode(lat, longitude, tags.name, tags.houseNumber, tags.street, tags.stories);
+                        } else if (tags.shop != Shop.None) {
+                            includeInOrder = true;
+                            newNode = new ShopNode(lat, longitude, tags.shop, tags.name);
                         } else {
-                            newNode = allNodes[id] = new Node(lat, longitude);
+                            newNode = new Node(lat, longitude);
                         }
-                        
+
+                        allNodes[id] = newNode;
+                        if (includeInOrder) {
+                            RankedDictionary<double, Node> longNodes;
+                            if (!orderedNodes.TryGetValue(lat, out longNodes)) {
+                                longNodes = orderedNodes[lat] = new RankedDictionary<double, Node>();
+                            }
+                            longNodes[longitude] = newNode;
+                        }
+
                         if (tags.crossing == CrossingType.Zebra) {
                             var zebra = Ways[id] = new Way(
                                 tags.name,
@@ -321,12 +406,15 @@ namespace MinecraftMapper {
                             roof = new RoofInfo(tags.roofType, tags.roofColor, tags.roofDirection, tags.roofHeight, tags.roofMaterial, tags.roofOrientationAcross);
                         }
                         if (tags.building != BuildingType.None) {
-                            var buildingObj = Buildings[Convert.ToInt64(data.Attribute("id").Value)] = new Building(
+                            var buildingId = Convert.ToInt64(data.Attribute("id").Value);
+                            var buildingObj = Buildings[buildingId] = new Building(
+                                buildingId,
                                 tags.name, 
                                 tags.houseNumber, 
                                 tags.street, 
                                 tags.amenity, 
                                 tags.material,
+                                tags.buildingColor,
                                 roof,
                                 nodes.ToArray()
                             );
@@ -346,23 +434,16 @@ namespace MinecraftMapper {
                             int itemsCount = 0;
                             foreach (var group in orderedNodes.ElementsBetween(minLat, maxLat)) {
                                 foreach (var longAndNode in group.Value.ElementsBetween(minLong, maxLong)) {
+                                    
                                     var node = longAndNode.Value;
                                     if (node.Lat >= minLat && node.Lat <= maxLat &&
                                         node.Long >= minLong && node.Long <= maxLong) {
-                                        var buildingFromPoint = Buildings[node.NodeNumber] = new Building(
-                                            node.Name ?? tags.name,
-                                            node.HouseNumber,
-                                            node.Street,
-                                            tags.amenity,
-                                            tags.material,
-                                            node.Lat,
-                                            node.Long,
-                                            roof,
-                                            nodes.ToArray());
-                                        buildingFromPoint.Stories = tags.stories;
+                                        buildingObj.AddItem(node);
                                         itemsCount++;
-                                        Console.WriteLine("ByAddressNode: " + node.HouseNumber + " " + node.Street + " (" + itemsCount + ")");
-                                        BuildingsByAddress[node.HouseNumber + " " + node.Street] = buildingFromPoint;
+                                        AddressNode sn = node as AddressNode;
+                                        if (sn != null) {
+                                            BuildingsByAddress[sn.HouseNumber + " " + sn.Street] = buildingObj;
+                                        }
                                     }
                                 }
                             }
@@ -540,6 +621,9 @@ namespace MinecraftMapper {
             internal Material? roofMaterial;
             public Wall wall;
             internal Parking parking;
+            public Color? buildingColor;
+            public Shop shop;
+            internal int level;
         }
 
         public enum Parking {
@@ -700,6 +784,7 @@ namespace MinecraftMapper {
                     }
                     break;
                 case "building:material": tagInfo.material = ReadMaterial(value); break;
+                case "building:colour": tagInfo.buildingColor = ParseColor(value); break;
                 case "building:levels":
                     int levels;
                     if (Int32.TryParse(value, out levels)) {
@@ -718,6 +803,15 @@ namespace MinecraftMapper {
                     break;
                 case "amenity":
                     tagInfo.amenity = ReadAmenity(value);
+                    break;
+                case "shop":
+                    tagInfo.shop = ReadShop(value);
+                    break;
+                case "level":
+                    int level;
+                    if (Int32.TryParse(value, out level)) {
+                        tagInfo.level = level;
+                    }
                     break;
                 case "layer":
                     tagInfo.layer = Int32.Parse(value);
@@ -747,6 +841,7 @@ namespace MinecraftMapper {
                 case "crossing":
                     switch (value) {
                         case "uncontrolled;zebra":
+                        case "uncontrolled;marked": 
                         case "zebra": tagInfo.crossing = CrossingType.Zebra; break;
                         case "traffic_signals": tagInfo.crossing = CrossingType.TrafficSignals; break;
                         case "uncontrolled": tagInfo.crossing = CrossingType.Uncontrolled; break;
@@ -814,6 +909,30 @@ namespace MinecraftMapper {
                 case "name":
                     tagInfo.name = value;
                     break;
+            }
+        }
+
+        private static Shop ReadShop(string value) {
+            switch (value) {
+                case "variety_store": return Shop.VarietyStore;
+                case "convenience": return Shop.Convenience;
+                case "stationary": return Shop.Stationary;
+                case "car_repair": return Shop.CarRepair;
+                case "hairdresser": return Shop.HairDresser;
+                case "bakery": return Shop.Bakery;
+                case "bicycle": return Shop.Bicycle;
+                case "beauty": return Shop.Beauty;
+                case "boutique": return Shop.Boutique;
+                case "wine": return Shop.Wine;
+                case "clothes": return Shop.Clothes;
+                case "bag": return Shop.Bag;
+                case "shoes": return Shop.Shoes;
+                case "lingerie": return Shop.Lingerie;
+                case "razors": return Shop.Razors;
+                case "jewelery": return Shop.Jewelery;
+                default:
+                    Console.WriteLine("Unknown shop: {0}", value);
+                    return Shop.None;
             }
         }
 
@@ -886,6 +1005,7 @@ namespace MinecraftMapper {
             switch (value) {
                 case "black": return new Color(0, 0, 0);
                 case "gray":
+                case "beige": return new Color(0xF5, 0xF5, 0xDC);
                 case "grey": return new Color(0x80, 0x80, 0x80);
                 case "maroon": return new Color(0x80, 0, 0);
                 case "olive": return new Color(0x80, 0x80, 0);
@@ -1091,8 +1211,10 @@ namespace MinecraftMapper {
                 case "device_charging_station": break;
                 case "makerspace": break;
                 case "charging_station": break;
+                case "polling_station": break;
+                case "shoeshine": break;
                 default:
-                    Console.WriteLine(value);
+                    Console.WriteLine("Unknown amenity: {0}", value);
                     break;
             }
 

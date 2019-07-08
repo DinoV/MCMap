@@ -41,7 +41,10 @@ namespace MinecraftMapper {
                 totalInverseDist += inverseDist;
             }
 
-            return new BlockPosition((int)(xTotal / totalInverseDist), (int)(zTotal / totalInverseDist));
+            return new BlockPosition(
+                (int)(xTotal / totalInverseDist) /*+ 1100*/, 
+                (int)(zTotal / totalInverseDist) /*+ 200*/
+            );
         }
     }
 }

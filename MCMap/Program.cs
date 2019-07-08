@@ -100,7 +100,7 @@ namespace MinecraftMapper {
         }
 
         public void MapIt() {
-            Save();
+            //Save();
             DateTime startTime = DateTime.Now;
             _reader.ReadData();
             GC.Collect();
@@ -116,12 +116,13 @@ namespace MinecraftMapper {
                 var roadPoints = DrawRoads();
 
                 DrawStreetLamps(roadPoints);
-
+                _world.Level.Spawn = new SpawnPoint(6084, _world.Level.Spawn.Y, 14566);
                 var buildingPoints = DrawBuildings();
+
                 Save();
 
 
-                //DrawBarriers(buildingPoints);
+                DrawBarriers(buildingPoints);
 
                 Save();
             } catch (Exception e) {
@@ -218,11 +219,19 @@ namespace MinecraftMapper {
         }
 
         static int Main(string[] args) {
-            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrictCreative2";
-            string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Seattle";
+            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
+            // string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\New World";
+            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Seattle";
+            string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Hackathon";
+            var world = NbtWorld.Open(map);
+            //var block = world.GetBlockManager().GetBlock(0, 130, 0);
+            Console.WriteLine(world);
+            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
+            
             //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCreativeLidar4_2";
             string log = null;
-            string osmData = @"C:\Users\dino_\Downloads\map_seattle.xml";
+            //string osmData = @"C:\Users\dino_\Downloads\SeattleTargetted.osm";
+            string osmData = @"C:\Users\dino_\Downloads\SeattleCDMini.osm";
             List<long> buildings = new List<long>();
             List<long> roads = new List<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
@@ -265,7 +274,14 @@ namespace MinecraftMapper {
                     positionBases.Add(new PositionBase(lat, lng, mcX, mcZ));
                 }
             }
-
+            //                    47.6152895, -122.3062076
+            //                    47.6164976, -122.3029356
+            //  Columbia & 26th 47.6164554, -122.2987516
+            //  20th and East Olive 47.6090430, -122.3063048
+            /*var seattleCDMini = new[] {
+                new PositionBase(47.6090430, -122.2987516, 10, 1450),  //26th and East Columbia
+                new PositionBase(47.6171548, -122.3061587, 946, 97)   
+            };*/
             var seattleCD = new[] {
                 new PositionBase(47.6227923, -122.2825852, 8488, 2016),
                 new PositionBase(47.6061313, -122.3408919, 1244, 4878),
@@ -484,23 +500,25 @@ namespace MinecraftMapper {
         private HashSet<BlockPosition> DrawBuildings() {
             int cur = 0;
             HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
+            HashSet<BlockPosition> roofPoints = new HashSet<BlockPosition>();
             IEnumerable<KeyValuePair<long, OsmReader.Building>> buildingList;
             if (_buildings.Length != 0) {
                 buildingList = _reader.Buildings.Where(x => _buildings.Contains(x.Key));
             } else {
-                buildingList = _reader.Buildings.OrderBy(x => MapOrder(_conv, x.Value.Nodes.First()));
+                buildingList = _reader.Buildings.OrderBy(x => MapOrder(_conv, x.Value.BuildingNodes.First()));
             }
             // new[] { reader.Buildings[224047836], reader.Buildings[224048580], reader.Buildings[222409095], reader.Buildings[222409094] }
-            //var buildings = new long[]{ 363250260, 4856210822, 4856214545 /*224047836, 224048580, 222409095, 222409094*/ };
+            //var buildings = new long[]{ 224047836 /*363250260, 4856210822, 4856214545 /*224047836, 224048580, 222409095, 222409094*/ };
             //var buildingList = _reader.Buildings.Where(x => buildings.Contains(x.Key));
             foreach (var idAndBuilding in buildingList) {
                 var building = idAndBuilding.Value;
                 if ((++cur % 200) == 0) {
+                    Console.WriteLine("Saving blocks...");
                     SaveBlocks();
                 }
 
                 WriteLine("{0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, _reader.Buildings.Count);
-                DrawBuilding(building, buildingPoints, (int)(idAndBuilding.Key % 16));
+                DrawBuilding(building, buildingPoints, roofPoints, (int)(idAndBuilding.Key % 16));
             }
 
             SaveBlocks();
@@ -514,40 +532,19 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawBuilding(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int color) {
-            int blockType = BlockType.STAINED_CLAY;
-            int data;
-            if (building.Street != null && building.HouseNumber != null) {
-                data = (building.Street.GetHashCode() ^ building.HouseNumber.GetHashCode()) % 16;
-                switch (building.Amenity) {
-                    //case OsmReader.Amenity.Restaurant: blockType = BlockType;
-                    case OsmReader.Amenity.TrainStation: blockType = BlockType.BRICK_BLOCK; break;
-                    case OsmReader.Amenity.FireStation: blockType = BlockType.BRICK_BLOCK; break;
-                    case OsmReader.Amenity.School: blockType = BlockType.BRICK_BLOCK; break;
-                    case OsmReader.Amenity.Parking:
-                        blockType = BlockType.STONE;
-                        data = (int)StoneBrickType.NORMAL;
-                        break;
-                    case OsmReader.Amenity.Bank: blockType = BlockType.SANDSTONE; break;
-                    case OsmReader.Amenity.PlaceOfWorship: blockType = BlockType.NETHER_BRICK; break;
-                    case OsmReader.Amenity.CommunityCenter:
-                        blockType = BlockType.OBSIDIAN;
-                        break;
-                    case OsmReader.Amenity.Theatre: blockType = BlockType.WOOD; data = (int)WoodType.BIRCH; break;
-                }
-            } else {
-                data = color;
-            }
+        private void DrawBuilding(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, HashSet<BlockPosition> roofPoints, int color) {
+            int blockType, data;
+            GetBuildingColor(building, color, out blockType, out data);
 
             int top = Int32.MaxValue, left = Int32.MaxValue, bottom = Int32.MinValue, right = Int32.MinValue;
 
             int buildingHeight = Math.Max(6, (int)((building.Stories ?? 1) * 4) + 2);
             int maxHeight = Int32.MinValue;
-            var start = building.Nodes[0];
-            var houseLoc = _conv.ToBlock(start.Lat, start.Long);
-            for (int i = 1; i < building.Nodes.Length; i++) {
+            var start = building.BuildingNodes[0];
+
+            for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
-                var to = _conv.ToBlock(building.Nodes[i].Lat, building.Nodes[i].Long);
+                var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
 
                 top = Math.Min(top, from.Z);
                 bottom = Math.Max(bottom, from.Z);
@@ -560,13 +557,14 @@ namespace MinecraftMapper {
                         maxHeight = Math.Max(maxHeight, height);
                     }
                 }
-                start = building.Nodes[i];
+                start = building.BuildingNodes[i];
             }
 
-            start = building.Nodes[0];
-            for (int i = 1; i < building.Nodes.Length; i++) {
+            start = building.BuildingNodes[0];
+            var baseHeights = new Dictionary<BlockPosition, int>();
+            for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
-                var to = _conv.ToBlock(building.Nodes[i].Lat, building.Nodes[i].Long);
+                var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
                     if (_conv.IsValidPoint(point.Block)) {
@@ -578,7 +576,7 @@ namespace MinecraftMapper {
 
                         var height = _bm.GetHeight(point.Block.X, point.Block.Z);
                         //WriteLine("{0},{1},{2}", point.X, height, point.Z);
-
+                        baseHeights[point.Block] = height;
                         for (int j = 0; j < (maxHeight - height) + buildingHeight; j++) {
                             if (height - 1 + j > 240) {
                                 break;
@@ -589,174 +587,679 @@ namespace MinecraftMapper {
                     }
                 }
 
-                start = building.Nodes[i];
+                start = building.BuildingNodes[i];
                 //WriteLine("From {0},{1} to {2},{3}", from.X, from.Z, to.X, to.Z);
             }
 
-#if FALSE
-            if (building.Roof != null) {
-                var roofStart = maxHeight + buildingHeight - 1;
-                switch (building.Roof.Type) {
-                    case OsmReader.RoofType.Hipped:
+
+            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, maxHeight, buildingPoints, roofPoints);
+            
+            
+            DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
+        }
+
+        private static void GetBuildingColor(OsmReader.Building building, int color, out int blockType, out int data) {
+            blockType = BlockType.STAINED_CLAY;
+            
+            switch (building.Material) {
+                case OsmReader.Material.Stone:
+                    blockType = BlockType.STONE; data = (int)StoneType.STONE; return;
+                case OsmReader.Material.Wood: blockType = BlockType.WOOD; data = (int)WoodType.OAK; return;
+                case OsmReader.Material.Brick: blockType = BlockType.BRICK_BLOCK; data = 0; return;
+                case OsmReader.Material.Concrete: blockType = BlockType.CONCRETE; data = 0; return;
+                case OsmReader.Material.Sandstone: blockType = BlockType.SANDSTONE; data = 0;return;
+                case OsmReader.Material.Slate: blockType = BlockType.STONE; data = (int)StoneType.POLISHED_GRANITE; return;
+                case OsmReader.Material.Asphalt: blockType = BlockType.CONCRETE; data = 15; return; // black concrete
+            }
+            if (building.Color != null) {
+                var colorMapping = FindClosestColor(building.Color.Value);
+                blockType = colorMapping.VerticalBlockType;
+                data = colorMapping.VerticalBlockData;
+                return;
+            }
+
+            if (building.Street != null && building.HouseNumber != null) {
+                data = (building.Street.GetHashCode() ^ building.HouseNumber.GetHashCode() + 7) % 16;
+                switch (building.Amenity) {
+                    //case OsmReader.Amenity.Restaurant: blockType = BlockType;
+                    case OsmReader.Amenity.TrainStation: blockType = BlockType.BRICK_BLOCK; break;
+                    case OsmReader.Amenity.FireStation: blockType = BlockType.BRICK_BLOCK; break;
+                    case OsmReader.Amenity.School: blockType = BlockType.BRICK_BLOCK; break;
+                    case OsmReader.Amenity.Parking:
+                        blockType = BlockType.STONE;
+                        data = (int)StoneBrickType.NORMAL;
                         break;
-                    case OsmReader.RoofType.Gabled:
-                        var width = Math.Abs(top - bottom);
-                        var len = Math.Abs(left - right);
+                    case OsmReader.Amenity.Bank: blockType = BlockType.SANDSTONE; break;
+                    case OsmReader.Amenity.PlaceOfWorship: blockType = BlockType.NETHER_BRICK; data = 0; break;
+                    case OsmReader.Amenity.CommunityCenter:
+                        blockType = BlockType.OBSIDIAN;
+                        break;
+                    case OsmReader.Amenity.Theatre: blockType = BlockType.WOOD; data = (int)WoodType.BIRCH; break;
+                }
+            } else {
+                data = color;
+            }
+        }
 
-                        if (len > width && !building.Roof.OrientationAcross) {
-                            var top = Math.Min(topLeft.Z, topRight.Z);
-                            var bottom = Math.Max(bottomLeft.Z, bottomRight.Z);
-                            var left = Math.Min(topLeft.X, bottomLeft.X);
-                            // east west                            
-                            for (int i = 0; i < width / 2; i++) {
-                                for (int j = 0; j < len; j++) {
-                                    _bm.SetID(j + left, roofStart + i, top + i, BlockType.COBBLESTONE_STAIRS);
-                                    _bm.SetData(j + left, roofStart + i, top + i, (int)FullDirection.South);
+        private void DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+            DrawSignItems(building, top, left, bottom, right, buildingPoints);
 
-                                    _bm.SetID(j + left, roofStart + i, bottom - i, BlockType.COBBLESTONE_STAIRS);
-                                    _bm.SetData(j + left, roofStart + i, bottom - i, (int)FullDirection.North);
-                                }
+            if (building.Street == null || building.HouseNumber == null) {
+                return;
+            }
+            Direction direction = 0;
+            var start = building.BuildingNodes[0];
+            var houseLoc = _conv.ToBlock(start.Lat, start.Long);
+            List<OsmReader.Way> roads;
+            BlockPosition signLoc = houseLoc;
+            if (_reader.RoadsByName.TryGetValue(building.Street, out roads)) {
+                // Find the closest point between a random point on the building and the road...
+                var first = building.BuildingNodes.First();
+
+                var points = roads.SelectMany(x => x.Nodes);
+                OsmReader.Node closestRoadPoint = ClosestPoint(first, points);
+
+
+
+                var roadLoc = _conv.ToBlock(closestRoadPoint.Lat, closestRoadPoint.Long);
+                // And then find the closest building point to the closest road point
+                //OsmReader.Node closestBuildingPoint = ClosestPoint(closestRoadPoint, building.Nodes);
+
+                // Figure out whre the sign is placed.  This can be a primary point from a single node
+                // where it would be placed on an overhead map, or we'll find the closest point between
+                // the building and a road point.
+                Console.WriteLine("----");
+                OsmReader.Node signPoint = null, buildingWallPoint = null;
+
+                double distance = double.MaxValue;
+                /* See if we can find the line which is mostly parallel to the road
+                    * that is closest to the road */
+                var nextClosest = NextClosestPoint(first, closestRoadPoint, points);
+
+                OsmReader.Node prev = building.BuildingNodes[0];
+                double closestPerpWall = double.MaxValue;
+                OsmReader.Node building1 = null, building2 = null;
+                for (int i = 1; i < building.BuildingNodes.Length; i++) {
+                    var dx1 = closestRoadPoint.Lat - nextClosest.Lat;
+                    var dy1 = closestRoadPoint.Long - nextClosest.Long;
+                    var dx2 = prev.Lat - building.BuildingNodes[i].Lat;
+                    var dy2 = prev.Long - building.BuildingNodes[i].Long;
+                    var cosAngle = Math.Abs((dx1 * dx2 + dy1 * dy2) / Math.Sqrt((dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2)));
+                    if (cosAngle >= 0.99) {
+                        // lines are basically parallel
+                        var perpPoint = FindPerpindicualPoint(closestRoadPoint, prev, building.BuildingNodes[i]);
+                        var dist = Math.Sqrt(
+                            (perpPoint.Lat - closestRoadPoint.Lat) * (perpPoint.Lat - closestRoadPoint.Lat) +
+                            (perpPoint.Long - closestRoadPoint.Long) * (perpPoint.Long - closestRoadPoint.Long)
+                        );
+                        if (dist < closestPerpWall) {
+                            closestPerpWall = dist;
+                            building1 = prev;
+                            building2 = building.BuildingNodes[i];
+                        }
+                    }
+
+                    prev = building.BuildingNodes[i];
+                }
+
+                if (building1 != null) {
+                    /* We found the closest mostly parallel line */
+                    var front = _conv.ToBlock(building1.Lat, building1.Long);
+                    var other = _conv.ToBlock(building2.Lat, building2.Long);
+                    signPoint = building1;
+                    var doorX = (front.X + other.X) / 2;
+                    var doorZ = (front.Z + other.Z) / 2;
+                    buildingWallPoint = building1;
+                    int doorHeight;
+                    if (baseHeights.TryGetValue(new BlockPosition(doorX, doorZ), out doorHeight)) {
+                        _bm.SetID(doorX, doorHeight + 1, doorZ, (int)BlockType.WOOD_DOOR);
+                        _bm.SetData(doorX, doorHeight + 1, doorZ, 0);
+                        int facing = 0;
+                        const int facing_east = 0;
+                        const int facing_south = 1;
+                        const int facing_west = 2;
+                        const int facing_north = 3;
+                        if (doorZ == other.Z) {
+                            if (building1.Lat < closestRoadPoint.Lat) {
+                                facing = facing_north;
+                            } else {
+                                facing = facing_south;
                             }
-                            if ((width & 0x01) != 0) {
-                                for (int j = 0; j < len; j++) {
-                                    _bm.SetID(j + left, roofStart + width / 2, top + width / 2 + 1, BlockType.COBBLESTONE);
-                                    _bm.SetData(j + left, roofStart + width / 2, top + width / 2 + 1, 0);
-                                }
-                            }
-
                         } else {
-                            var top = Math.Min(topLeft.Z, topRight.Z);
-                            var bottom = Math.Max(bottomLeft.Z, bottomRight.Z);
-                            var left = Math.Min(topLeft.X, bottomLeft.X);
-                            var right = Math.Max(topRight.X, bottomRight.X);
-                            // north south
-                            for (int i = 0; i < len / 2; i++) {
-                                for (int j = 0; j < width; j++) {
-                                    _bm.SetID(i + left, roofStart + i, top + j, BlockType.COBBLESTONE_STAIRS);
-                                    _bm.SetData(i + left, roofStart + i, top + j, (int)FullDirection.East);
-
-                                    _bm.SetID(right - i, roofStart + i, top + j, BlockType.COBBLESTONE_STAIRS);
-                                    _bm.SetData(right - i, roofStart + i, top + j, (int)FullDirection.West);
-                                }
-                            }
-                            if ((len & 0x01) != 0) {
-                                for (int j = 0; j < width; j++) {
-                                    _bm.SetID(top + width / 2 + 1, roofStart + len / 2, top + j, BlockType.COBBLESTONE);
-                                    _bm.SetData(top + width / 2 + 1, roofStart + len / 2, top + j, 0);
-                                }
+                            if (building1.Long < closestRoadPoint.Long) {
+                                facing = facing_east;
+                            } else {
+                                facing = facing_west;
                             }
                         }
-                        break;
-                }
-            }
-#endif
-            int direction = 0;
-            if (!string.IsNullOrWhiteSpace(building.HouseNumber) && !string.IsNullOrWhiteSpace(building.Street)) {
-                List<OsmReader.Way> roads;
-                BlockPosition signLoc = houseLoc;
-                if (_reader.RoadsByName.TryGetValue(building.Street, out roads)) {
-                    // Find the closest point between a random point on the building and the road...
-                    var first = building.Nodes.First();
-
-                    var points = roads.SelectMany(x => x.Nodes);
-                    OsmReader.Node closestRoadPoint = ClosestPoint(first, points);
-
-                    var roadLoc = _conv.ToBlock(closestRoadPoint.Lat, closestRoadPoint.Long);
-                    // And then find the closest building point to the closest road point
-                    //OsmReader.Node closestBuildingPoint = ClosestPoint(closestRoadPoint, building.Nodes);
-
-                    // Figure out whre the sign is placed.  This can be a primary point from a single node
-                    // where it would be placed on an overhead map, or we'll find the closest point between
-                    // the building and a road point.
-                    OsmReader.Node signPoint = null, buildingWallPoint = null;
-                    if (building.PrimaryLat != null && building.PrimaryLong != null) {
-                        signPoint = new OsmReader.Node(building.PrimaryLat.Value, building.PrimaryLong.Value);
-                        double distance = double.MaxValue;
-                        var prevBuildingPoint = building.Nodes.Last();
-                        buildingWallPoint = building.Nodes.First();
-                        foreach (var buildingPoint in building.Nodes) {
-                            var angle1 = Math.Atan2(prevBuildingPoint.Lat - buildingPoint.Lat, prevBuildingPoint.Long - buildingPoint.Long) * 180 / Math.PI;
-                            var angle2 = Math.Atan2(signPoint.Lat - buildingPoint.Lat, signPoint.Long - buildingPoint.Long) * 180 / Math.PI;
-                            if (Math.Abs(angle1 - angle2) < 15 ||
-                                (Math.Abs(angle1 - angle2) > (180 - 7.5) && Math.Abs(angle1 - angle2) < (180 + 7.5)) ||
-                                (Math.Abs(angle1 - angle2) > (360 - 11) && Math.Abs(angle1 - angle2) < (360 + 11))) {
-                                // If we have something like:
-                                //      +---------------------------------------------------------------+
-                                //      |                                                               |
-                                // +----+                                        *                      |
-                                // |                                                                    |
-                                // The node at the * can end up being reported as being close the horizontal
-                                // line, so we do a specific check to avoid that and discount angles that
-                                // we're aligned with.
-                                continue;
-                            }
-                            var pointOnBuilding = FindPerpindicualPoint(signPoint, prevBuildingPoint, buildingPoint);
+                        _bm.SetID(doorX, doorHeight + 2, doorZ, (int)BlockType.WOOD_DOOR);
+                        _bm.SetData(doorX, doorHeight + 2, doorZ, 0x08 | facing);
+                    }
+                } else {
+                    foreach (var buildingPoint in building.BuildingNodes) {
+                        foreach (var roadPoint in points) {
                             double newDistance = Math.Sqrt(
-                                (signPoint.Lat - pointOnBuilding.Lat) * (signPoint.Lat - pointOnBuilding.Lat) +
-                                (signPoint.Long - pointOnBuilding.Long) * (signPoint.Long - pointOnBuilding.Long)
+                                (buildingPoint.Lat - roadPoint.Lat) * (buildingPoint.Lat - roadPoint.Lat) +
+                                (buildingPoint.Long - roadPoint.Long) * (buildingPoint.Long - roadPoint.Long)
                             );
-                            //var prevMC = _conv.ToBlock(prevBuildingPoint.Lat, prevBuildingPoint.Long);
-                            //var buildingMC = _conv.ToBlock(buildingPoint.Lat, buildingPoint.Long);
-                            //var buildingPerpMC = _conv.ToBlock(pointOnBuilding.Lat, pointOnBuilding.Long);
                             if (newDistance < distance) {
-                                buildingWallPoint = pointOnBuilding;
+                                signPoint = buildingPoint;
                                 distance = newDistance;
                             }
-                            prevBuildingPoint = buildingPoint;
                         }
-                    } else {
-                        double distance = double.MaxValue;
-                        foreach (var buildingPoint in building.Nodes) {
-                            foreach (var roadPoint in points) {
-                                double newDistance = Math.Sqrt(
-                                    (buildingPoint.Lat - roadPoint.Lat) * (buildingPoint.Lat - roadPoint.Lat) +
-                                    (buildingPoint.Long - roadPoint.Long) * (buildingPoint.Long - roadPoint.Long)
-                                );
-                                if (newDistance < distance) {
-                                    signPoint = buildingPoint;
-                                    distance = newDistance;
-                                }
-                            }
-                        }
-                        buildingWallPoint = signPoint;
                     }
+                    buildingWallPoint = signPoint;
+                }
 
-                    OsmReader.Node comparison = NextClosestPoint(signPoint, closestRoadPoint, points);
+                OsmReader.Node comparison = NextClosestPoint(signPoint, closestRoadPoint, points);
 
-                    // Figure out the direction of the house vs the road...
-                    var pointOnRoad = FindPerpindicualPoint(signPoint, comparison, closestRoadPoint);
-                    var angle = Math.Atan2(signPoint.Lat - pointOnRoad.Lat, signPoint.Long - pointOnRoad.Long) * 180 / Math.PI;
-                    var buildingLoc = _conv.ToBlock(buildingWallPoint.Lat, buildingWallPoint.Long);
-                    var signMC = _conv.ToBlock(signPoint.Lat, signPoint.Long);
-                    if ((angle > -45 && angle < 45) || angle > 135 || angle < -135) {
-                        if (closestRoadPoint.Long > signPoint.Long) { // this comparison is backwards due to negative longitude in Seattle
-                            signLoc = new BlockPosition(buildingLoc.X + 1, buildingLoc.Z);
-                            direction = 12; // east
-                        } else {
-                            signLoc = new BlockPosition(buildingLoc.X - 1, buildingLoc.Z);
-                            direction = 4; // west
-                        }
+                // Figure out the direction of the house vs the road...
+                //var pointOnRoad = FindPerpindicualPoint(signPoint, comparison, closestRoadPoint);
+                //var angle = Math.Atan2(signPoint.Lat - pointOnRoad.Lat, signPoint.Long - pointOnRoad.Long) * 180 / Math.PI;
+                var angle = Math.Atan2(signPoint.Lat - buildingWallPoint.Lat, signPoint.Long - buildingWallPoint.Long) * 180 / Math.PI;
+                var buildingLoc = _conv.ToBlock(buildingWallPoint.Lat, buildingWallPoint.Long);
+                if ((angle > -45 && angle < 45) || angle > 135 || angle < -135) {
+                    if (closestRoadPoint.Long > signPoint.Long) { // this comparison is backwards due to negative longitude in Seattle
+                        signLoc = new BlockPosition(buildingLoc.X + 1, buildingLoc.Z);
+                        direction = Direction.East;
                     } else {
-                        if (closestRoadPoint.Lat < signPoint.Lat) {
-                            signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z + 1);
-                            direction = 0;// south
-                        } else {
-                            signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z - 1);
-                            direction = 8; // north
-                        }
+                        signLoc = new BlockPosition(buildingLoc.X - 1, buildingLoc.Z);
+                        direction = Direction.West;
+                    }
+                } else {
+                    if (closestRoadPoint.Lat < signPoint.Lat) {
+                        signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z + 1);
+                        direction = Direction.South;
+                    } else {
+                        signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z - 1);
+                        direction = Direction.North;
                     }
                 }
 
-                List<string> names = new List<string>();
-                AddSignName(names, building.Name);
+                DrawSign(signLoc, direction, building.Name, building.HouseNumber);
+            }
+        }
 
-                AlphaBlock block = new AlphaBlock(BlockType.SIGN_POST);
-                var ent = block.GetTileEntity() as TileEntitySign;
-                AddSignName(names, building.HouseNumber);
-                SetSignName(names, ent);
-                var houseHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
-                _bm.SetBlock(signLoc.X, houseHeight, signLoc.Z, block);
-                _bm.SetData(signLoc.X, houseHeight, signLoc.Z, direction);
+        private void DrawSign(BlockPosition signLoc, Direction direction, params string[] text) {
+            List<string> names = new List<string>();
+            foreach (var str in text) {
+                AddSignName(names, str);
+            }
+            AlphaBlock block = new AlphaBlock(BlockType.SIGN_POST);
+            var ent = block.GetTileEntity() as TileEntitySign;
+            SetSignName(names, ent);
+            var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
+            var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
+            while (b.ID == BlockType.AIR) {
+                // GetHeight doesn't always work so well :P
+                groundHeight--;
+                b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
+            }
+            _bm.SetBlock(signLoc.X, groundHeight + 1, signLoc.Z, block);
+            _bm.SetData(signLoc.X, groundHeight + 1, signLoc.Z, (int)direction);
+        }
+
+        private void DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPoints) {
+            if (building.SignItems == null) {
+                return;
+            }
+            foreach (var signNode in building.SignItems) {
+                var block = _conv.ToBlock(signNode.Lat, signNode.Long);
+                // distances, ordered per FullDirection enum.  We're finding which
+                // side of the building we're closest too, assuming a square building.
+                int[] distances = new[] {
+                     Math.Abs(block.X - left),
+                     Math.Abs(block.X - right),
+                     Math.Abs(block.Z - bottom),
+                     Math.Abs(block.Z - top)
+                };
+
+                int minDist = Int32.MaxValue;
+                for (int i = 0; i < distances.Length; i++) {
+                    minDist = Math.Min(distances[i], minDist);
+                }
+                BlockPosition targetPoint = default(BlockPosition);
+                Direction dir = Direction.East;
+                int adjX = 0, adjZ = 0;
+                // Then we draw the sign in the opposite direction, outside the building
+                // perimeter.
+                for (int i = 0; i < 4; i++) {
+                    if (distances[i] == minDist) {
+                        switch ((FullDirection)i) {
+                            case FullDirection.East:
+                                dir = Direction.West;
+                                adjX = -1;
+                                targetPoint = new BlockPosition(left, block.Z);
+                                break;
+                            case FullDirection.West:
+                                dir = Direction.East;
+                                adjX = 1;
+                                targetPoint = new BlockPosition(right, block.Z);
+                                break;
+                            case FullDirection.South:
+                                dir = Direction.South;
+                                adjZ = 1;
+                                targetPoint = new BlockPosition(block.X, bottom);
+                                break;
+                            case FullDirection.North:
+                                dir = Direction.North;
+                                adjZ = -1;
+                                targetPoint = new BlockPosition(block.X, top);
+                                break;
+                        }
+                        break;
+                    }
+                }
+
+                while (!buildingPoints.Contains(targetPoint) && 
+                    targetPoint.X >= left - 1 && 
+                    targetPoint.X <= right + 1 && 
+                    targetPoint.Z >= top - 1 && 
+                    targetPoint.Z <= bottom - 1) {
+                    targetPoint = new BlockPosition(targetPoint.X - adjX, targetPoint.Z - adjZ);
+                    
+                    
+                }
+                targetPoint = new BlockPosition(targetPoint.X + adjX, targetPoint.Z + adjZ);
+                DrawSign(targetPoint, dir, signNode.Description);
+            }
+        }
+
+        private static double GetDistance(OsmReader.Node signPoint, OsmReader.Node pointOnBuilding) {
+            return Math.Sqrt(
+                (signPoint.Lat - pointOnBuilding.Lat) * (signPoint.Lat - pointOnBuilding.Lat) +
+                (signPoint.Long - pointOnBuilding.Long) * (signPoint.Long - pointOnBuilding.Long)
+            );
+        }
+
+        private struct ColorMapping {
+            public readonly OsmReader.Color Color;
+            public readonly int VerticalBlockType;
+            public readonly int StairsBlockType;
+            public readonly int VerticalBlockData;
+
+            public ColorMapping(OsmReader.Color color, int vertical, int stairs, int verticalBlockData = 0) {
+                Color = color;
+                VerticalBlockType = vertical;
+                StairsBlockType = stairs;
+                VerticalBlockData = verticalBlockData;
+            }
+        }
+
+        private static ColorMapping[] ColorMappings = new[] {
+            new ColorMapping(
+                new OsmReader.Color(0x80, 0x80, 0x80), 
+                BlockType.COBBLESTONE,
+                BlockType.COBBLESTONE_STAIRS
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0, 0),
+                BlockType.BRICK_BLOCK,
+                BlockType.BRICK_STAIRS
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x80, 0, 0),
+                BlockType.NETHER_BRICK,
+                BlockType.NETHER_BRICK_STAIRS
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x80, 0, 0x80),
+                BlockType.PURPUR,
+                BlockType.PURPUR_STAIRS
+            ),
+             new ColorMapping(
+                new OsmReader.Color(0xff, 0xff, 0xff),
+                BlockType.QUARTZ_BLOCK,
+                BlockType.QUARTZ_STAIRS
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0xff, 0xff),
+                BlockType.SANDSTONE,
+                BlockType.SANDSTONE_STAIRS
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0xff, 0xff),
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                0
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0xa5, 0x00), // orange
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                1
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0x0, 0xff), // mangenta
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                2
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xad, 0xd8, 0xe6), // light blue
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                3
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0xff, 0xe0), // light yellow
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                4
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x32, 0xcd, 0x32), // lime
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                5
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xff, 0xc0, 0xcb), // pink
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                6
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x7f, 0x7f, 0x7f), // gray
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                7
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xaf, 0xaf, 0xaf), // light gray
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                8
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x00, 0xff, 0xff), // cyan
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                9
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xa0, 0x20, 0xf0), // purple
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                10
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x0, 0x0, 0xff), // blue
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                11
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xa5, 0x2a, 0x2a), // brown
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                12
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x00, 0xff, 0x00), // green
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                13
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0xaa, 0x0, 0x00), // red
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                14
+            ),
+            new ColorMapping(
+                new OsmReader.Color(0x0, 0x0, 0x0), // mangenta
+                BlockType.STAINED_CLAY,
+                BlockType.SANDSTONE_STAIRS,
+                15
+            ),
+        };
+
+        private void DrawBuildingRoof(OsmReader.Building building, int top, int left, int bottom, int right, int buildingHeight, int maxHeight, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints) {
+            // OAKWOAD_STAIRS
+            // SPRUCEWOOD_STAIRS
+            // BIRCHWOOD_STAIRS
+            // DARKOAK_WOOD_STAIRS
+            // ACACIA_WOOD_STAIRS
+            // RED_SANDSTONE_STAIRS
+            // STONE_BRICK_STAIRS
+            // JUNGLE_WOOD_STAIRS
+            int dataType = (int)0;
+            var roofStart = maxHeight + buildingHeight - 1;
+            var color = building?.Roof?.Color;
+            ColorMapping roofMapping = default(ColorMapping);
+            if (color == null) {
+                roofMapping = ColorMappings[Math.Abs(building.BuildingNodes.First().Lat.GetHashCode() ^ (building.HouseNumber?.GetHashCode() ?? 0)) % ColorMappings.Length];
+            } else {
+                roofMapping = FindClosestColor(color.Value);
+            }
+            int stairType = roofMapping.StairsBlockType;
+            int baseType = roofMapping.VerticalBlockType;
+            switch (building.Roof?.Type) {
+                //default:
+                default:
+                case OsmReader.RoofType.Flat:
+                    DrawFlatRoof(top, left, bottom, right, buildingPositions, roofPoints, roofStart, roofMapping);
+                    break;
+                case OsmReader.RoofType.Hipped: 
+                    DrawHippedRoof(top, left, bottom, right, buildingPositions, roofPoints, dataType, roofStart, stairType, baseType);
+                    break;
+                case OsmReader.RoofType.Gabled:
+                    DrawGabledRoof(building, top, left, bottom, right, buildingPositions, roofPoints, dataType, roofStart, stairType, baseType);
+                    break;
+            }
+        }
+
+        private static ColorMapping FindClosestColor(OsmReader.Color color) {
+            ColorMapping roofMapping = default(ColorMapping);
+            double closest = double.MaxValue;
+
+            foreach (var mapping in ColorMappings) {
+                var distance = Math.Sqrt(
+                    (color.R - mapping.Color.R) * (color.R - mapping.Color.R) +
+                    (color.G - mapping.Color.B) * (color.G - mapping.Color.G) +
+                    (color.B - mapping.Color.R) * (color.B - mapping.Color.B)
+                );
+                if (distance < closest) {
+                    closest = distance;
+                    roofMapping = mapping;
+                    if (distance == 0) {
+                        break;
+                    }
+                }
+            }
+
+            return roofMapping;
+        }
+
+        private void DrawGabledRoof(OsmReader.Building building, int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
+            var height = Math.Abs(top - bottom);
+            var width = Math.Abs(left - right);
+
+            if (width > height && !building.Roof.OrientationAcross) {
+                for (int x = left; x <= right; x++) {
+                    int tStart = -1, bStart = -1;
+                    for (int y = top; y <= bottom; y++) {
+                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                            tStart = y;
+                            break;
+                        }
+                    }
+                    for (int y = top; y >= bottom; y--) {
+                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                            bStart = y;
+                            break;
+                        }
+                    }
+                    var lHeight = Math.Abs(tStart - bStart);
+
+                    for (int i = 0; i < (lHeight + 1) / 2; i++) {
+                        if (roofPoints.Contains(new BlockPosition(x, i + tStart))) {
+                            continue;
+                        }
+                        _bm.SetID(x, roofStart + i, i + tStart, stairType);
+                        _bm.SetData(x, roofStart + i, i + tStart, (int)FullDirection.East);
+
+                        _bm.SetID(x, roofStart + i, bStart - i, stairType);
+                        _bm.SetData(x, roofStart + i, bStart - i, (int)FullDirection.West);
+
+                        roofPoints.Add(new BlockPosition(x, i + tStart));
+                        roofPoints.Add(new BlockPosition(x, bStart - i));
+
+                        for (int j = 0; j < i; j++) {
+                            _bm.SetID(x, roofStart + j, i + tStart, baseType);
+                            _bm.SetData(x, roofStart + j, i + tStart, dataType);
+
+                            _bm.SetID(x, roofStart + j, bStart - i, baseType);
+                            _bm.SetData(x, roofStart + j, bStart - i, dataType);
+                        }
+                    }
+
+                    if ((lHeight & 0x01) == 0) {
+                        for (int j = 0; j <= lHeight / 2; j++) {
+                            if (roofPoints.Contains(new BlockPosition(x, tStart + lHeight / 2))) {
+                                continue;
+                            }
+                            _bm.SetID(x, roofStart + j, tStart + lHeight / 2, baseType);
+                            _bm.SetData(x, roofStart + j, tStart + lHeight / 2, dataType);
+                            roofPoints.Add(new BlockPosition(x, tStart + lHeight / 2));
+                        }
+                    }
+                }
+            } else {
+                for (int y = top; y <= bottom; y++) {
+                    int lStart = -1, rStart = -1;
+                    for (int x = left; x <= right; x++) {
+                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                            lStart = x;
+                            break;
+                        }
+                    }
+                    for (int x = right; x >= left; x--) {
+                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                            rStart = x;
+                            break;
+                        }
+                    }
+                    var lWidth = Math.Abs(lStart - rStart);
+
+                    for (int i = 0; i < (lWidth + 1) / 2; i++) {
+                        if (roofPoints.Contains(new BlockPosition(i + lStart, y))) {
+                            continue;
+                        }
+
+                        _bm.SetID(i + lStart, roofStart + i, y, stairType);
+                        _bm.SetData(i + lStart, roofStart + i, y, (int)FullDirection.East);
+
+                        _bm.SetID(rStart - i, roofStart + i, y, stairType);
+                        _bm.SetData(rStart - i, roofStart + i, y, (int)FullDirection.West);
+                        roofPoints.Add(new BlockPosition(i + lStart, y));
+                        for (int j = 0; j < i; j++) {
+                            _bm.SetID(i + lStart, roofStart + j, y, baseType);
+                            _bm.SetData(i + lStart, roofStart + j, y, dataType);
+
+                            _bm.SetID(rStart - i, roofStart + j, y, baseType);
+                            _bm.SetData(rStart - i, roofStart + j, y, dataType);
+                        }
+                    }
+
+                    if ((lWidth & 0x01) == 0) {
+                        for (int j = 0; j <= lWidth / 2; j++) {
+                            if (roofPoints.Contains(new BlockPosition(lStart + lWidth / 2, y))) {
+                                continue;
+                            }
+
+                            _bm.SetID(lStart + lWidth / 2, roofStart + j, y, baseType);
+                            _bm.SetData(lStart + lWidth / 2, roofStart + j, y, dataType);
+                            roofPoints.Add(new BlockPosition(lStart + lWidth / 2, y));
+
+                        }
+                    }
+                }
+            }
+        }
+
+        private void DrawHippedRoof(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
+            for (int z = top; z <= bottom; z++) {
+                //int tStart = -1, bStart = -1;
+                int lStart = -1, rStart = -1;
+                for (int x = left; x <= right; x++) {
+                    if (buildingPositions.Contains(new BlockPosition(x, z))) {
+                        lStart = x;
+                        break;
+                    }
+                }
+                for (int x = right; x >= left; x--) {
+                    if (buildingPositions.Contains(new BlockPosition(x, z))) {
+                        rStart = x;
+                        break;
+                    }
+                }
+
+                var lWidth = Math.Abs(lStart - rStart);
+
+                int targetHeight = (lWidth + 1) / 2;
+                if (z - top < lWidth / 2) {
+                    targetHeight = Math.Min(targetHeight, z - top);
+                } else if (bottom - z < lWidth / 2) {
+                    targetHeight = Math.Min(targetHeight, bottom - z);
+                }
+                for (int i = 0; i <= (lWidth + 1) / 2; i++) {
+                    for (int y = 0; y <= Math.Min(i, targetHeight); y++) {
+                        if (roofPoints.Contains(new BlockPosition(i + lStart, z))) {
+                            continue;
+                        }
+                        roofPoints.Add(new BlockPosition(i + lStart, z));
+                        roofPoints.Add(new BlockPosition(rStart - i, z));
+                        if (y == Math.Min(targetHeight, i)) {
+                            FullDirection? direction = null;
+                            if (i > z - top) {
+                                direction = FullDirection.South;
+                            } else if (i > bottom - z) {
+                                direction = FullDirection.North;
+                            }
+                            _bm.SetID(i + lStart, roofStart + y, z, stairType);
+                            _bm.SetData(i + lStart, roofStart + y, z, (int)(direction ?? FullDirection.East));
+
+                            _bm.SetID(rStart - i, roofStart + y, z, stairType);
+                            _bm.SetData(rStart - i, roofStart + y, z, (int)(direction ?? FullDirection.West));
+
+                        } else {
+                            _bm.SetID(i + lStart, roofStart + y, z, baseType);
+                            _bm.SetData(i + lStart, roofStart + y, z, dataType);
+
+                            _bm.SetID(rStart - i, roofStart + y, z, baseType);
+                            _bm.SetData(rStart - i, roofStart + y, z, dataType);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void DrawFlatRoof(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping) {
+            for (int y = top; y <= bottom; y++) {
+                int lStart = -1, rStart = -1;
+                for (int x = left; x <= right; x++) {
+                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        lStart = x;
+                        break;
+                    }
+                }
+                for (int x = right; x >= left; x--) {
+                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        rStart = x;
+                        break;
+                    }
+                }
+
+                for (int x = lStart; x <= rStart; x++) {
+                    if (roofPoints.Contains(new BlockPosition(x, y))) {
+                        continue;
+                    }
+                    _bm.SetID(x, roofStart, y, roofMapping.VerticalBlockType);
+                    _bm.SetData(x, roofStart, y, 0);
+                    roofPoints.Add(new BlockPosition(x, y));
+                }
             }
         }
 
@@ -904,7 +1407,7 @@ namespace MinecraftMapper {
             //var roads = new[] { reader.Ways[6358491], reader.Ways[6358495], reader.Ways[158718178], reader.Ways[241283900], reader.Ways[6433374] };
             foreach (var roadGroup in roads) {
                 foreach (var way in roadGroup) {
-                    if ((++cur % 100) == 0) {
+                    if ((++cur % 50) == 0) {
                         SaveBlocks();
                     }
 
@@ -1120,7 +1623,7 @@ namespace MinecraftMapper {
                                 // rather than the current height.
                                 height = existingRoad.Height;
                             } else {
-                                height = _bm.GetHeight(point.Block.X, point.Block.Z);
+                                height = _bm.GetHeight(point.Block.X, point.Block.Z) + 1;
                             }
 
                             if (_leftEdgeId != null && point.Column < SidewalkWidth) {
@@ -1387,10 +1890,7 @@ namespace MinecraftMapper {
                 if ((++cur % 200) == 0) {
                     SaveBlocks();
                 }
-                if (intersection.Key.Lat == 47.6181052 &&
-                    intersection.Key.Long == -122.3041758) {
-                    Console.WriteLine("HEY!");
-                }
+
                 if (intersection.Value.Count > 1) { // this node represents an intersection of 2 or more ways
                     // find the bounds of the intersecting roads...
                     var pos = _conv.ToBlock(intersection.Key.Lat, intersection.Key.Long);
@@ -1771,8 +2271,8 @@ namespace MinecraftMapper {
             SetSignName(name, ent);
 
             if (_conv.IsValidPoint(target)) {
-                _bm.SetBlock(target.X, height, target.Z, block);
-                _bm.SetData(target.X, height, target.Z, (int)direction);
+                _bm.SetBlock(target.X, height + 1, target.Z, block);
+                _bm.SetData(target.X, height + 1, target.Z, (int)direction);
             }
         }
 
@@ -1864,6 +2364,7 @@ namespace MinecraftMapper {
             // draw the vertical traffic light pieces...
             // We start with a piece of polished andisite, then an anvil, and have an
             // overlapping armor stand to look like cross walk buttons.
+            // Disabled because it currently looks weird when ported to Bedrock addition
             var entities = _bm.GetChunk(target.X, height, target.Z).Entities;
             var armor = new TypedEntity("minecraft:armor_stand");
             armor.Position = new Vector3() { X = target.X + .5, Y = height, Z = target.Z + .5 };
