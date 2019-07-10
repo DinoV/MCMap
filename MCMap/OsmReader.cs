@@ -48,15 +48,19 @@ namespace MinecraftMapper {
 
         public class AddressNode : Node {
             public readonly string HouseNumber, Street, Name;
+            public readonly int? Stories;
+            public readonly long Id;
 
-            public AddressNode(double lat, double lng, string name, string houseNumber, string street, int? stories) : base(lat, lng) {
+            public AddressNode(double lat, double lng, long id, string name, string houseNumber, string street, int? stories) : base(lat, lng) {
                 HouseNumber = houseNumber;
+                Id = id;
                 Name = name;
                 Street = street;
+                Stories = stories;
             }
 
             public override string ToString() {
-                return string.Format("{0},{1} {2} {3}", Lat, Long, HouseNumber, Street);
+                return $"{Lat},{Long} {HouseNumber} {Street} node {Id}";
             }
 
             public override string[] Description {
@@ -69,8 +73,8 @@ namespace MinecraftMapper {
         public class AmenityNode : AddressNode {
             public readonly Amenity Amenity;
           
-            public AmenityNode(double lat, double lng, Amenity amenity, string name, string houseNumber, string street, int? stories) : 
-                base(lat, lng, name, houseNumber, street, stories) {
+            public AmenityNode(double lat, double lng, long id, Amenity amenity, string name, string houseNumber, string street, int? stories) : 
+                base(lat, lng, id, name, houseNumber, street, stories) {
                 this.Amenity = amenity;
             }
 
@@ -336,12 +340,13 @@ namespace MinecraftMapper {
                         }
                         Node newNode;
                         bool includeInOrder = false;
+                        
                         if (tags.amenity != Amenity.None) {
                             includeInOrder = true;
-                            newNode = new AmenityNode(lat, longitude, tags.amenity, tags.name, tags.houseNumber, tags.street, tags.stories);
+                            newNode = new AmenityNode(lat, longitude, id, tags.amenity, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
                         } else if (tags.houseNumber != null && tags.street != null) {
                             includeInOrder = true;
-                            newNode = new AddressNode(lat, longitude, tags.name, tags.houseNumber, tags.street, tags.stories);
+                            newNode = new AddressNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
                         } else if (tags.shop != Shop.None) {
                             includeInOrder = true;
                             newNode = new ShopNode(lat, longitude, tags.shop, tags.name);
@@ -438,6 +443,13 @@ namespace MinecraftMapper {
                                     var node = longAndNode.Value;
                                     if (node.Lat >= minLat && node.Lat <= maxLat &&
                                         node.Long >= minLong && node.Long <= maxLong) {
+                                        AddressNode addrTag = node as AddressNode;
+                                        if (addrTag != null && 
+                                            addrTag.Stories != null && 
+                                            buildingObj.Stories != null && 
+                                            addrTag.Stories.Value > buildingObj.Stories.Value) {
+                                            buildingObj.Stories = addrTag.Stories;
+                                        }
                                         buildingObj.AddItem(node);
                                         itemsCount++;
                                         AddressNode sn = node as AddressNode;
@@ -623,7 +635,7 @@ namespace MinecraftMapper {
             internal Parking parking;
             public Color? buildingColor;
             public Shop shop;
-            internal int level;
+            public int? level;
         }
 
         public enum Parking {

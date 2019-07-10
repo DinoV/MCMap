@@ -574,7 +574,7 @@ namespace MinecraftMapper {
                         }
                         buildingPoints.Add(point.Block);
 
-                        var height = _bm.GetHeight(point.Block.X, point.Block.Z);
+                        var height = GetHeight(point.Block);
                         //WriteLine("{0},{1},{2}", point.X, height, point.Z);
                         baseHeights[point.Block] = height;
                         for (int j = 0; j < (maxHeight - height) + buildingHeight; j++) {
@@ -642,7 +642,7 @@ namespace MinecraftMapper {
         }
 
         private void DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
-            DrawSignItems(building, top, left, bottom, right, buildingPoints);
+            DrawSignItems(building, top, left, bottom, right, baseHeights, buildingPoints);
 
             if (building.Street == null || building.HouseNumber == null) {
                 return;
@@ -712,28 +712,21 @@ namespace MinecraftMapper {
                     buildingWallPoint = building1;
                     int doorHeight;
                     if (baseHeights.TryGetValue(new BlockPosition(doorX, doorZ), out doorHeight)) {
-                        _bm.SetID(doorX, doorHeight + 1, doorZ, (int)BlockType.WOOD_DOOR);
-                        _bm.SetData(doorX, doorHeight + 1, doorZ, 0);
-                        int facing = 0;
-                        const int facing_east = 0;
-                        const int facing_south = 1;
-                        const int facing_west = 2;
-                        const int facing_north = 3;
+                        DoorDirection facing = 0;
                         if (doorZ == other.Z) {
                             if (building1.Lat < closestRoadPoint.Lat) {
-                                facing = facing_north;
+                                facing = DoorDirection.North;
                             } else {
-                                facing = facing_south;
+                                facing = DoorDirection.South;
                             }
                         } else {
                             if (building1.Long < closestRoadPoint.Long) {
-                                facing = facing_east;
+                                facing = DoorDirection.East;
                             } else {
-                                facing = facing_west;
+                                facing = DoorDirection.West;
                             }
                         }
-                        _bm.SetID(doorX, doorHeight + 2, doorZ, (int)BlockType.WOOD_DOOR);
-                        _bm.SetData(doorX, doorHeight + 2, doorZ, 0x08 | facing);
+                        DrawDoor(facing, doorX, doorZ, doorHeight);
                     }
                 } else {
                     foreach (var buildingPoint in building.BuildingNodes) {
@@ -780,14 +773,41 @@ namespace MinecraftMapper {
             }
         }
 
+        enum DoorDirection {
+            East = 0,
+            South = 1,
+            West = 2,
+            North = 3
+        }
+
+        private void DrawDoor(DoorDirection facing, int doorX, int doorZ, int doorHeight) {
+            _bm.SetID(doorX, doorHeight + 1, doorZ, (int)BlockType.WOOD_DOOR);
+            _bm.SetData(doorX, doorHeight + 1, doorZ, 0);
+            
+            _bm.SetID(doorX, doorHeight + 2, doorZ, (int)BlockType.WOOD_DOOR);
+            _bm.SetData(doorX, doorHeight + 2, doorZ, 0x08 | (int)facing);
+        }
+
         private void DrawSign(BlockPosition signLoc, Direction direction, params string[] text) {
+            DrawSign(signLoc, direction, BlockType.SIGN_POST, null, text);
+        }
+
+        private void DrawSign(BlockPosition signLoc, Direction direction, int signType = BlockType.SIGN_POST, int ? height = null, params string[] text) {
             List<string> names = new List<string>();
             foreach (var str in text) {
                 AddSignName(names, str);
             }
-            AlphaBlock block = new AlphaBlock(BlockType.SIGN_POST);
+            AlphaBlock block = new AlphaBlock(signType);
             var ent = block.GetTileEntity() as TileEntitySign;
             SetSignName(names, ent);
+            if (height == null) {
+                height = GetHeight(signLoc) + 1;
+            }
+            _bm.SetBlock(signLoc.X, height.Value, signLoc.Z, block);
+            _bm.SetData(signLoc.X, height.Value, signLoc.Z, (int)direction);
+        }
+
+        private int GetHeight(BlockPosition signLoc) {
             var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
             var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
             while (b.ID == BlockType.AIR) {
@@ -795,14 +815,15 @@ namespace MinecraftMapper {
                 groundHeight--;
                 b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
             }
-            _bm.SetBlock(signLoc.X, groundHeight + 1, signLoc.Z, block);
-            _bm.SetData(signLoc.X, groundHeight + 1, signLoc.Z, (int)direction);
+
+            return groundHeight;
         }
 
-        private void DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPoints) {
+        private void DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
             if (building.SignItems == null) {
                 return;
             }
+            Dictionary<BlockPosition, OsmReader.Node> signPoints = new Dictionary<BlockPosition, OsmReader.Node>();
             foreach (var signNode in building.SignItems) {
                 var block = _conv.ToBlock(signNode.Lat, signNode.Long);
                 // distances, ordered per FullDirection enum.  We're finding which
@@ -821,8 +842,8 @@ namespace MinecraftMapper {
                 BlockPosition targetPoint = default(BlockPosition);
                 Direction dir = Direction.East;
                 int adjX = 0, adjZ = 0;
-                // Then we draw the sign in the opposite direction, outside the building
-                // perimeter.
+                // Next find a point that is along the perimeter of the building, or possibly
+                // further if the building isn't an exact rectangle
                 for (int i = 0; i < 4; i++) {
                     if (distances[i] == minDist) {
                         switch ((FullDirection)i) {
@@ -851,17 +872,54 @@ namespace MinecraftMapper {
                     }
                 }
 
+                // And walk that point back into the closest building point
                 while (!buildingPoints.Contains(targetPoint) && 
                     targetPoint.X >= left - 1 && 
                     targetPoint.X <= right + 1 && 
                     targetPoint.Z >= top - 1 && 
                     targetPoint.Z <= bottom - 1) {
                     targetPoint = new BlockPosition(targetPoint.X - adjX, targetPoint.Z - adjZ);
-                    
-                    
                 }
+
+                var buildingPoint = targetPoint;
                 targetPoint = new BlockPosition(targetPoint.X + adjX, targetPoint.Z + adjZ);
-                DrawSign(targetPoint, dir, signNode.Description);
+
+                if (signPoints.ContainsKey(targetPoint)) {
+                    continue;
+                }
+                /*
+                while (signPoints.TryGetValue(targetPoint, out existingPoint)) {
+                    if (dir == Direction.East || dir == Direction.West) {
+                        if (existingPoint.Long > signNode.Long) {
+                            targetPoint = new BlockPosition(targetPoint.X, targetPoint.Z + 1);
+                        } else {
+                            targetPoint = new BlockPosition(targetPoint.X, targetPoint.Z - 1);
+                        }
+                    } else {
+                        if (existingPoint.Lat > signNode.Lat) {
+                            targetPoint = new BlockPosition(targetPoint.X + 1, targetPoint.Z);
+                        } else {
+                            targetPoint = new BlockPosition(targetPoint.X - 1, targetPoint.Z);
+                        }
+                    }
+                } */
+
+                signPoints[targetPoint] = signNode;
+
+                // And finally bump it out to the outside of the building
+                if (buildingPoints.Contains(buildingPoint)) {
+                    DoorDirection doorDir = 0;
+                    switch (dir) {
+                        case Direction.East: doorDir = DoorDirection.East; break;
+                        case Direction.South: doorDir = DoorDirection.South; break;
+                        case Direction.West: doorDir = DoorDirection.West; break;
+                        case Direction.North: doorDir = DoorDirection.North; break;
+                    }
+                    DrawDoor(doorDir, targetPoint.X - adjX, targetPoint.Z - adjZ, baseHeights[buildingPoint]);
+                    DrawSign(targetPoint, dir, BlockType.WALL_SIGN, baseHeights[buildingPoint] + 3, signNode.Description);
+                } else {
+                    DrawSign(targetPoint, dir, signNode.Description);
+                }
             }
         }
 
@@ -2603,10 +2661,8 @@ namespace MinecraftMapper {
                     if (float.TryParse(storiesStr, out stories)) {
                         building.Stories = stories;
                     }
-                } else {
-                    //WriteLine(fullAddress);
                 }
-                //WriteLine(fullAddress.ToLower());
+                
                 address.Clear();
             }
         }
