@@ -539,7 +539,7 @@ namespace MinecraftMapper {
             int top = Int32.MaxValue, left = Int32.MaxValue, bottom = Int32.MinValue, right = Int32.MinValue;
 
             int buildingHeight = Math.Max(6, (int)((building.Stories ?? 1) * 4) + 2);
-            int maxHeight = Int32.MinValue;
+            int groundMaxHeight = Int32.MinValue;
             var start = building.BuildingNodes[0];
 
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
@@ -553,49 +553,194 @@ namespace MinecraftMapper {
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
                     if (_conv.IsValidPoint(point.Block)) {
-                        var height = _bm.GetHeight(point.Block.X, point.Block.Z);
-                        maxHeight = Math.Max(maxHeight, height);
+                        var height = GetHeight(point.Block);
+                        groundMaxHeight = Math.Max(groundMaxHeight, height);
                     }
                 }
                 start = building.BuildingNodes[i];
             }
 
-            start = building.BuildingNodes[0];
+           var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
+
+            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
+
+            var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
+
+            DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors);
+        }
+
+        private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int blockType, int data, int buildingHeight, int maxHeight) {
+            var start = building.BuildingNodes[0];
             var baseHeights = new Dictionary<BlockPosition, int>();
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
                 var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
-                    if (_conv.IsValidPoint(point.Block)) {
-                        // if we have duplicate entries for a building don't draw it twice...
-                        if (buildingPoints.Contains(point.Block)) {
+                    if (!_conv.IsValidPoint(point.Block) || buildingPoints.Contains(point.Block)) {
+                        continue;
+                    }
+                    // if we have duplicate entries for a building don't draw it twice...
+                    buildingPoints.Add(point.Block);
+
+                    var height = GetHeight(point.Block);
+                    baseHeights[point.Block] = height;
+
+                    for (int j = 0; j < (maxHeight - height) + buildingHeight; j++) {
+                        if (height + j > 240) {
+                            break;
+                        }
+                        
+                        _bm.SetID(point.Block.X, height + j, point.Block.Z, (int)blockType);
+                        _bm.SetData(point.Block.X, height + j, point.Block.Z, data);
+                    }
+                }
+
+                start = building.BuildingNodes[i];
+            }
+            return baseHeights;
+        }
+
+        private void DrawBuildingWindows(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int data, int buildingHeight, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> doors) {
+            var start = building.BuildingNodes[0];
+            for (int i = 1; i < building.BuildingNodes.Length; i++) {
+                var from = _conv.ToBlock(start.Lat, start.Long);
+                var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
+
+                int dist = Math.Max(Math.Abs(from.X - to.X), Math.Abs(from.Z - to.Z)) + 1;
+                var rand = new Random((int)building.Id);
+
+                // Do a 1st pass over the line to get the local maximum height, and location of the
+                // doors.  The former handles buildings on hills so there's windows on base levels, and
+                // the latter lets us account for doors during window placement.
+                bool[] hasDoor = new bool[dist];
+                int maxGroundHeight = 0;
+                int doorCount = 0;
+                foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                    if (!_conv.IsValidPoint(point.Block) || !baseHeights.ContainsKey(point.Block)) {
+                        continue;
+                    }
+                    maxGroundHeight = Math.Max(maxGroundHeight, baseHeights[point.Block]);
+                    if (doors.Contains(point.Block)) {
+                        hasDoor[point.Row] = true;
+                        doorCount++;
+                    }
+                }
+
+                // Now figure out the window placement...
+                bool[] windowPlacement = new bool[dist];
+                bool[] groundLevelWindowPlacement = new bool[dist];
+                int remaining = dist - 2;
+                int startIndex = 1;
+
+                int windowHeight = 3;
+                int verticalDistance = 3;
+                int verticalOffset = 0;
+
+                int blockType = BlockType.GLASS_PANE;
+                int storyCount = buildingHeight / (windowHeight + verticalDistance);
+                if (doorCount > 1 && storyCount <= 1) {
+                    /* single story floor w/ multiple doors, let's just place windows around the
+                     * doors */
+                    verticalOffset = 3;
+                    windowHeight = 4;
+                    blockType = BlockType.GLASS;
+                    for (int wallPos = 0; wallPos < groundLevelWindowPlacement.Length; wallPos++) {
+                        if (hasDoor[wallPos]) {
+                            groundLevelWindowPlacement[wallPos] = true;
+                            if (wallPos > 0) {
+                                groundLevelWindowPlacement[wallPos - 1] = true;
+                            }
+                            if (wallPos + 1 < groundLevelWindowPlacement.Length) {
+                                groundLevelWindowPlacement[wallPos + 1] = true;
+                            }
+                        }
+                    }
+                    windowPlacement = groundLevelWindowPlacement;
+                } else {
+                    if (storyCount <= 1) {
+                        windowHeight = 2;
+                    }
+                    while (remaining > 4) {
+                        int totalSize = rand.Next(1, Math.Min(7, remaining / 2));
+                        int spacing = rand.Next(1, Math.Max(1, Math.Min(totalSize - 1, totalSize / 6)));
+
+                        for (int j = 0; j < totalSize - spacing; j++) {
+                            windowPlacement[j + startIndex] = true;
+                            windowPlacement[dist - j - startIndex - 1] = true;
+
+                            if (!HasDoor(hasDoor, j + startIndex)) {
+                                groundLevelWindowPlacement[j + startIndex] = true;
+                            }
+                            if (!HasDoor(hasDoor, dist - j - startIndex - 1)) {
+                                groundLevelWindowPlacement[dist - j - startIndex - 1] = true;
+                            }
+                        }
+                        startIndex += totalSize;
+                        remaining -= totalSize * 2;
+                    }
+                }
+
+                var points = PlotLine(from.X, from.Z, to.X, to.Z).ToArray();
+                for(int curPoint = 0; curPoint < points.Length; curPoint++ ) {
+                    var point = points[curPoint];
+                    if (!_conv.IsValidPoint(point.Block) || !baseHeights.ContainsKey(point.Block)) {
+                        continue;
+                    }
+
+                    var height = baseHeights[point.Block];
+                    for (int j = 0; j < (maxGroundHeight - height) + buildingHeight; j++) {
+                        if (height + j > 240) {
+                            break;
+                        }
+                        // we want the windows to line up even across elevation changes,
+                        // so we base them upon the ground level from maxGroundHeight.
+                        int baseHeight = j - (maxGroundHeight - height);
+                        if (baseHeight <= 0) {
+                            // don't place windows below ground
                             continue;
                         }
-                        buildingPoints.Add(point.Block);
-
-                        var height = GetHeight(point.Block);
-                        //WriteLine("{0},{1},{2}", point.X, height, point.Z);
-                        baseHeights[point.Block] = height;
-                        for (int j = 0; j < (maxHeight - height) + buildingHeight; j++) {
-                            if (height - 1 + j > 240) {
-                                break;
+                        var targetWindowPlacement = (baseHeight / (verticalDistance + windowHeight) > 0) ? windowPlacement : groundLevelWindowPlacement;
+                        if (((baseHeight + verticalOffset) % (verticalDistance + windowHeight)) >= verticalDistance && // vertical placement
+                            targetWindowPlacement[point.Row] &&                 // horizontal placement
+                            (baseHeight > 2 || !doors.Contains(point.Block))    // avoid doors
+                           ) {
+                            int targetBlock = blockType;
+                            /* force corners into glass blocks so they don't draw halfway */
+                            if (point.Row == 0 || point.Row == (dist - 1) ||
+                                (curPoint != 0 && points[curPoint - 1].Block.X != point.Block.X && points[curPoint - 1].Block.Z != point.Block.Z) ||
+                                (curPoint != points.Length - 1 && points[curPoint + 1].Block.X != point.Block.X && points[curPoint + 1].Block.Z != point.Block.Z)) {
+                                targetBlock = BlockType.GLASS;
                             }
-                            _bm.SetID(point.Block.X, height - 1 + j, point.Block.Z, (int)blockType);
-                            _bm.SetData(point.Block.X, height - 1 + j, point.Block.Z, data);
+                            _bm.SetID(point.Block.X, height + j, point.Block.Z, targetBlock);
+                            _bm.SetData(point.Block.X, height + j, point.Block.Z, 0);
                         }
                     }
                 }
 
                 start = building.BuildingNodes[i];
-                //WriteLine("From {0},{1} to {2},{3}", from.X, from.Z, to.X, to.Z);
             }
+        }
 
+        bool HasDoor(bool[] doors, int index) {
+            if (doors[index]) {
+                return true;
+            } else if (index > 0 && doors[index - 1]) {
+                return true;
+            } else if (index < doors.Length - 1 && doors[index + 1]) {
+                return true;
+            }
+            return false;
+        }
 
-            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, maxHeight, buildingPoints, roofPoints);
-            
-            
-            DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
+        private static bool DoorIsClose(HashSet<BlockPosition> doors, LinePosition point, int windowWidth) {
+            for (int i = -windowWidth; i <= windowWidth; i++) {
+                if (doors.Contains(new BlockPosition(point.Block.X + i, point.Block.Z)) ||
+                    doors.Contains(new BlockPosition(point.Block.X, point.Block.Z + i))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static void GetBuildingColor(OsmReader.Building building, int color, out int blockType, out int data) {
@@ -641,11 +786,11 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
-            DrawSignItems(building, top, left, bottom, right, baseHeights, buildingPoints);
+        private HashSet<BlockPosition> DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+            var doors = DrawSignItems(building, top, left, bottom, right, baseHeights, buildingPoints);
 
             if (building.Street == null || building.HouseNumber == null) {
-                return;
+                return doors;
             }
             Direction direction = 0;
             var start = building.BuildingNodes[0];
@@ -715,15 +860,15 @@ namespace MinecraftMapper {
                         DoorDirection facing = 0;
                         if (doorZ == other.Z) {
                             if (building1.Lat < closestRoadPoint.Lat) {
-                                facing = DoorDirection.North;
-                            } else {
                                 facing = DoorDirection.South;
+                            } else {
+                                facing = DoorDirection.North;
                             }
                         } else {
                             if (building1.Long < closestRoadPoint.Long) {
-                                facing = DoorDirection.East;
-                            } else {
                                 facing = DoorDirection.West;
+                            } else {
+                                facing = DoorDirection.East;
                             }
                         }
                         DrawDoor(facing, doorX, doorZ, doorHeight);
@@ -771,6 +916,7 @@ namespace MinecraftMapper {
 
                 DrawSign(signLoc, direction, building.Name, building.HouseNumber);
             }
+            return doors;
         }
 
         enum DoorDirection {
@@ -782,10 +928,10 @@ namespace MinecraftMapper {
 
         private void DrawDoor(DoorDirection facing, int doorX, int doorZ, int doorHeight) {
             _bm.SetID(doorX, doorHeight + 1, doorZ, (int)BlockType.WOOD_DOOR);
-            _bm.SetData(doorX, doorHeight + 1, doorZ, 0);
+            _bm.SetData(doorX, doorHeight + 1, doorZ, (int)facing);
             
             _bm.SetID(doorX, doorHeight + 2, doorZ, (int)BlockType.WOOD_DOOR);
-            _bm.SetData(doorX, doorHeight + 2, doorZ, 0x08 | (int)facing);
+            _bm.SetData(doorX, doorHeight + 2, doorZ, 0x08);
         }
 
         private void DrawSign(BlockPosition signLoc, Direction direction, params string[] text) {
@@ -819,9 +965,10 @@ namespace MinecraftMapper {
             return groundHeight;
         }
 
-        private void DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+        private HashSet<BlockPosition> DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+            HashSet<BlockPosition> doors = new HashSet<BlockPosition>();
             if (building.SignItems == null) {
-                return;
+                return doors;
             }
             Dictionary<BlockPosition, OsmReader.Node> signPoints = new Dictionary<BlockPosition, OsmReader.Node>();
             foreach (var signNode in building.SignItems) {
@@ -910,17 +1057,19 @@ namespace MinecraftMapper {
                 if (buildingPoints.Contains(buildingPoint)) {
                     DoorDirection doorDir = 0;
                     switch (dir) {
-                        case Direction.East: doorDir = DoorDirection.East; break;
-                        case Direction.South: doorDir = DoorDirection.South; break;
-                        case Direction.West: doorDir = DoorDirection.West; break;
-                        case Direction.North: doorDir = DoorDirection.North; break;
+                        case Direction.East: doorDir = DoorDirection.West; break;
+                        case Direction.South: doorDir = DoorDirection.North; break;
+                        case Direction.West: doorDir = DoorDirection.East; break;
+                        case Direction.North: doorDir = DoorDirection.South; break;
                     }
                     DrawDoor(doorDir, targetPoint.X - adjX, targetPoint.Z - adjZ, baseHeights[buildingPoint]);
+                    doors.Add(new BlockPosition(targetPoint.X - adjX, targetPoint.Z - adjZ));
                     DrawSign(targetPoint, dir, BlockType.WALL_SIGN, baseHeights[buildingPoint] + 3, signNode.Description);
                 } else {
                     DrawSign(targetPoint, dir, signNode.Description);
                 }
             }
+            return doors;
         }
 
         private static double GetDistance(OsmReader.Node signPoint, OsmReader.Node pointOnBuilding) {
@@ -1083,7 +1232,7 @@ namespace MinecraftMapper {
             // STONE_BRICK_STAIRS
             // JUNGLE_WOOD_STAIRS
             int dataType = (int)0;
-            var roofStart = maxHeight + buildingHeight - 1;
+            var roofStart = maxHeight + buildingHeight;
             var color = building?.Roof?.Color;
             ColorMapping roofMapping = default(ColorMapping);
             if (color == null) {
@@ -2797,13 +2946,13 @@ namespace MinecraftMapper {
             int x = x0;
 
             for (int y = y0; y <= y1; y++) {
-                yield return new LinePosition(new BlockPosition(x, y), index, y);
+                yield return new LinePosition(new BlockPosition(x, y), index, y - y0);
                 if (D >= 0) {
                     if (overlap) {
                         if (xi == -1) {
-                            yield return new LinePosition(new BlockPosition(x - 1, y), index, y);
+                            yield return new LinePosition(new BlockPosition(x - 1, y), index, y - y0);
                         } else {
-                            yield return new LinePosition(new BlockPosition(x, y + 1), index, y);
+                            yield return new LinePosition(new BlockPosition(x, y + 1), index, y - y0);
                         }
                     }
                     x = x + xi;
@@ -2861,13 +3010,13 @@ namespace MinecraftMapper {
             int y = y0;
             D = 2 * dy - dx;
             for (int x = x0; x <= x1; x++) {
-                yield return new LinePosition(new BlockPosition(x, y), index, x);
+                yield return new LinePosition(new BlockPosition(x, y), index, x - x0);
                 if (D >= 0) {
                     if (overlap) {
                         if (yi == -1) {
-                            yield return new LinePosition(new BlockPosition(x, y - 1), index, x);
+                            yield return new LinePosition(new BlockPosition(x, y - 1), index, x - x0);
                         } else {
-                            yield return new LinePosition(new BlockPosition(x + 1, y), index, x);
+                            yield return new LinePosition(new BlockPosition(x + 1, y), index, x - x0);
                         }
                     }
                     y = y + yi;
