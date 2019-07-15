@@ -561,6 +561,31 @@ namespace MinecraftMapper {
             }
 
            var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
+            int floorId = 0, floorData = 0;
+            switch (building.Id % 14) {
+                case 0:
+                case 1:
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                    floorId = BlockType.WOOD_SLAB;
+                    floorData = (int)(((building.Id % 14)) % 6) | 0x08;
+                    break;
+                case 6:
+                case 7:
+                case 8:
+                case 9:
+                case 10:
+                case 11:
+                case 12:
+                case 13:
+                    floorId = BlockType.STONE_SLAB;
+                    floorData = (int)(((building.Id % 14) - 6)) | 0x08;
+                    break;
+            }
+
+            DrawBuildingFloor(top, left, bottom, right, buildingPoints, floorId, floorData);
 
             DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
 
@@ -1466,6 +1491,33 @@ namespace MinecraftMapper {
                     _bm.SetID(x, roofStart, y, roofMapping.VerticalBlockType);
                     _bm.SetData(x, roofStart, y, 0);
                     roofPoints.Add(new BlockPosition(x, y));
+                }
+            }
+        }
+
+        private void DrawBuildingFloor(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, int blockType, int blockData) {
+            for (int y = top; y <= bottom; y++) {
+                int lStart = -1, rStart = -1;
+                for (int x = left; x <= right; x++) {
+                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        lStart = x + 1;
+                        break;
+                    }
+                }
+                for (int x = right; x >= left; x--) {
+                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        rStart = x - 1;
+                        break;
+                    }
+                }
+
+                for (int x = lStart; x <= rStart; x++) {
+                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        continue;
+                    }
+                    var height = GetHeight(new BlockPosition(x, y));
+                    _bm.SetID(x, height, y, blockType);
+                    _bm.SetData(x, height, y, blockData);
                 }
             }
         }
