@@ -113,6 +113,8 @@ namespace MinecraftMapper {
             try {
                 WriteLine("{0} roads", _reader.Ways.Count);
 
+                DrawParkingLots();
+
                 var roadPoints = DrawRoads();
 
                 DrawStreetLamps(roadPoints);
@@ -132,6 +134,43 @@ namespace MinecraftMapper {
             DateTime done = DateTime.Now;
             WriteLine("All done, data processing {0}, total {1}", dataProcessing - startTime, done - startTime);
             Console.ReadLine();
+        }
+
+        private void DrawParkingLots() {
+            foreach (var parking in _reader.ParkingLots) {
+                DrawParkingLot(parking);
+            }
+        }
+
+        private void DrawParkingLot(OsmReader.ParkingInfo parking) {
+            if (parking.Parking != OsmReader.Parking.Surface) {
+                return;
+            }
+            int blockType = BlockType.CONCRETE;
+            int blockData = 0;
+            var start = parking.Nodes[0];
+            var baseHeights = new Dictionary<BlockPosition, int>();
+            for (int i = 1; i < parking.Nodes.Length; i++) {
+                var from = _conv.ToBlock(start.Lat, start.Long);
+                var to = _conv.ToBlock(parking.Nodes[i].Lat, parking.Nodes[i].Long);
+
+                foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                    if (!_conv.IsValidPoint(point.Block)) {
+                        continue;
+                    }
+               
+                    int height = baseHeights[point.Block] = GetHeight(point.Block);
+                    
+                    _bm.SetID(point.Block.X, height, point.Block.Z, blockType);
+                    _bm.SetData(point.Block.X, height, point.Block.Z, blockData);
+                }
+
+                start = parking.Nodes[i];
+            }
+
+            int top, left, bottom, right;
+            CalculateBounds(parking.Nodes, out top, out left, out bottom, out right);
+            FillArea(top, left, bottom, right, baseHeights, blockType, blockData);
         }
 
         private void Save() {
@@ -536,15 +575,34 @@ namespace MinecraftMapper {
             int blockType, data;
             GetBuildingColor(building, color, out blockType, out data);
 
-            int top = Int32.MaxValue, left = Int32.MaxValue, bottom = Int32.MinValue, right = Int32.MinValue;
 
             int buildingHeight = Math.Max(6, (int)((building.Stories ?? 1) * 4) + 2);
-            int groundMaxHeight = Int32.MinValue;
-            var start = building.BuildingNodes[0];
+            var nodes = building.BuildingNodes;
+            int top, left, bottom, right;
+            int groundMaxHeight = CalculateBounds(nodes, out top, out left, out bottom, out right);
 
-            for (int i = 1; i < building.BuildingNodes.Length; i++) {
+            var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
+
+            DrawBuildingFloor(top, left, bottom, right, baseHeights, building);
+
+            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
+
+            var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
+
+            DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors);
+        }
+
+        private int CalculateBounds(OsmReader.Node[] nodes, out int top, out int left, out int bottom, out int right) {
+            top = Int32.MaxValue;
+            left = Int32.MaxValue;
+            bottom = Int32.MinValue;
+            right = Int32.MinValue;
+            int groundMaxHeight = Int32.MinValue;
+            var start = nodes[0];
+
+            for (int i = 1; i < nodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
-                var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
+                var to = _conv.ToBlock(nodes[i].Lat, nodes[i].Long);
 
                 top = Math.Min(top, from.Z);
                 bottom = Math.Max(bottom, from.Z);
@@ -557,41 +615,10 @@ namespace MinecraftMapper {
                         groundMaxHeight = Math.Max(groundMaxHeight, height);
                     }
                 }
-                start = building.BuildingNodes[i];
+                start = nodes[i];
             }
 
-           var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
-            int floorId = 0, floorData = 0;
-            switch (building.Id % 14) {
-                case 0:
-                case 1:
-                case 2:
-                case 3:
-                case 4:
-                case 5:
-                    floorId = BlockType.WOOD_SLAB;
-                    floorData = (int)(((building.Id % 14)) % 6) | 0x08;
-                    break;
-                case 6:
-                case 7:
-                case 8:
-                case 9:
-                case 10:
-                case 11:
-                case 12:
-                case 13:
-                    floorId = BlockType.STONE_SLAB;
-                    floorData = (int)(((building.Id % 14) - 6)) | 0x08;
-                    break;
-            }
-
-            DrawBuildingFloor(top, left, bottom, right, baseHeights, floorId, floorData);
-
-            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
-
-            var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
-
-            DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors);
+            return groundMaxHeight;
         }
 
         private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int blockType, int data, int buildingHeight, int maxHeight) {
@@ -1493,7 +1520,7 @@ namespace MinecraftMapper {
                         continue;
                     }
                     _bm.SetID(x, roofStart, y, roofMapping.VerticalBlockType);
-                    _bm.SetData(x, roofStart, y, 0);
+                    _bm.SetData(x, roofStart, y, roofMapping.VerticalBlockData);
                     roofPoints.Add(new BlockPosition(x, y));
                 }
             }
@@ -1504,12 +1531,42 @@ namespace MinecraftMapper {
             new BlockPosition(0, 1),
             new BlockPosition(0, -1),
         };
-        private void DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, int blockType, int blockData) {
+
+        private void DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, OsmReader.Building building) {
+            int blockType = 0, blockData = 0;
+            switch (building.Id % 14) {
+                case 0:
+                case 1:
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                    blockType = BlockType.WOOD_SLAB;
+                    blockData = (int)(((building.Id % 14)) % 6) | 0x08;
+                    break;
+                case 6:
+                case 7:
+                case 8:
+                case 9:
+                case 10:
+                case 11:
+                case 12:
+                case 13:
+                    blockType = BlockType.STONE_SLAB;
+                    blockData = (int)(((building.Id % 14) - 6)) | 0x08;
+                    break;
+            }
+
+            FillArea(top, left, bottom, right, baseHeights, blockType, blockData);
+        }
+
+        private void FillArea(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, int blockType, int blockData) {
             // First find a point in the building.  We start at the mid-point,
             // walk to hit a wall, and keep on walking until we hit a non-wall.
             int centerX = (left + right) / 2;
-            bool hitBuilding = false;
             BlockPosition? startPoint = null;
+            bool hitBuilding = false;
+                
             for (int z = top; z <= bottom; z++) {
                 if (baseHeights.ContainsKey(new BlockPosition(centerX, z))) {
                     hitBuilding = true;
@@ -1529,7 +1586,7 @@ namespace MinecraftMapper {
             floorPoints.Add(startPoint.Value);
             while (points.Count != 0) {
                 var next = points.Dequeue();
-                
+
                 var height = GetHeight(next);
                 newPoints++;
                 _bm.SetID(next.X, height, next.Z, blockType);

@@ -12,6 +12,7 @@ namespace MinecraftMapper {
         public readonly Dictionary<string, List<Way>> RoadsByName = new Dictionary<string, List<Way>>();
         public readonly Dictionary<long, Building> Buildings = new Dictionary<long, Building>();
         public readonly HashSet<Barrier> Barriers = new HashSet<Barrier>();
+        public readonly List<ParkingInfo> ParkingLots = new List<ParkingInfo>();
         public readonly Dictionary<string, Building> BuildingsByAddress = new Dictionary<string, Building>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
         public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
@@ -417,10 +418,10 @@ namespace MinecraftMapper {
                             var buildingId = Convert.ToInt64(data.Attribute("id").Value);
                             var buildingObj = Buildings[buildingId] = new Building(
                                 buildingId,
-                                tags.name, 
-                                tags.houseNumber, 
-                                tags.street, 
-                                tags.amenity, 
+                                tags.name,
+                                tags.houseNumber,
+                                tags.street,
+                                tags.amenity,
                                 tags.material,
                                 tags.buildingColor,
                                 roof,
@@ -442,14 +443,14 @@ namespace MinecraftMapper {
                             int itemsCount = 0;
                             foreach (var group in orderedNodes.ElementsBetween(minLat, maxLat)) {
                                 foreach (var longAndNode in group.Value.ElementsBetween(minLong, maxLong)) {
-                                    
+
                                     var node = longAndNode.Value;
                                     if (node.Lat >= minLat && node.Lat <= maxLat &&
                                         node.Long >= minLong && node.Long <= maxLong) {
                                         AddressNode addrTag = node as AddressNode;
-                                        if (addrTag != null && 
-                                            addrTag.Stories != null && 
-                                            buildingObj.Stories != null && 
+                                        if (addrTag != null &&
+                                            addrTag.Stories != null &&
+                                            buildingObj.Stories != null &&
                                             addrTag.Stories.Value > buildingObj.Stories.Value) {
                                             buildingObj.Stories = addrTag.Stories;
                                         }
@@ -492,9 +493,26 @@ namespace MinecraftMapper {
                             }
                         } else if (tags.barrier != BarrierKind.None) {
                             Barriers.Add(new Barrier(nodes.ToArray(), tags.barrier, tags.wall));
+                        } else if (tags.amenity == Amenity.Parking) {
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            ParkingLots.Add(new ParkingInfo(wayId, nodes.ToArray(), tags.parking, tags.surface));
                         }
                         break;
                 }
+            }
+        }
+
+        public class ParkingInfo {
+            public readonly long Id;
+            public readonly Node[] Nodes;
+            public readonly Parking Parking;
+            public readonly Surface Surface;
+
+            public ParkingInfo(long id, Node[] node, Parking parking, Surface surface) {
+                Id = id;
+                Nodes = node;
+                Parking = parking;
+                Surface = surface;
             }
         }
 
