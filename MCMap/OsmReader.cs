@@ -250,8 +250,10 @@ namespace MinecraftMapper {
             public readonly CrossingType Crossing;
             public readonly Surface Surface;
             public readonly bool OneWay;
+            public readonly long Id;
 
-            public Way(string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay) {
+            public Way(long id, string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay) {
+                Id = id;
                 Name = name;
                 Nodes = nodes;
                 Lanes = lanes;
@@ -365,6 +367,7 @@ namespace MinecraftMapper {
 
                         if (tags.crossing == CrossingType.Zebra) {
                             var zebra = Ways[id] = new Way(
+                                id,
                                 tags.name,
                                 new[] { newNode },
                                 tags.lanes,
@@ -460,7 +463,9 @@ namespace MinecraftMapper {
                                 }
                             }
                         } else if (tags.roadType != RoadType.None) {
-                            var road = Ways[Convert.ToInt64(data.Attribute("id").Value)] = new Way(
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            var road = Ways[wayId] = new Way(
+                                wayId,
                                 tags.name,
                                 nodes.ToArray(),
                                 tags.lanes,

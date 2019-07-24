@@ -167,7 +167,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawBarriers(HashSet<BlockPosition> buildingPositions) {
+        private void DrawBarriers(Dictionary<BlockPosition, int> buildingPositions) {
             int cur = 0;
             foreach (var barrier in _reader.Barriers.OrderBy(x => MapOrder(_conv, x.Nodes.First()))) {
                 if ((++cur % 100) == 0) {
@@ -200,7 +200,7 @@ namespace MinecraftMapper {
                     var to = _conv.ToBlock(barrier.Nodes[i].Lat, barrier.Nodes[i].Long);
 
                     foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
-                        if (buildingPositions.Contains(point.Block) ||
+                        if (buildingPositions.ContainsKey(point.Block) ||
                             wallPoints.Contains(point.Block)) {
                             continue;
                         }
@@ -497,9 +497,9 @@ namespace MinecraftMapper {
             }
         }
 
-        private HashSet<BlockPosition> DrawBuildings() {
+        private Dictionary<BlockPosition, int> DrawBuildings() {
             int cur = 0;
-            HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
+            var buildingPoints = new Dictionary<BlockPosition, int>();
             HashSet<BlockPosition> roofPoints = new HashSet<BlockPosition>();
             IEnumerable<KeyValuePair<long, OsmReader.Building>> buildingList;
             if (_buildings.Length != 0) {
@@ -532,7 +532,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawBuilding(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, HashSet<BlockPosition> roofPoints, int color) {
+        private void DrawBuilding(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, HashSet<BlockPosition> roofPoints, int color) {
             int blockType, data;
             GetBuildingColor(building, color, out blockType, out data);
 
@@ -585,7 +585,7 @@ namespace MinecraftMapper {
                     break;
             }
 
-            DrawBuildingFloor(top, left, bottom, right, buildingPoints, floorId, floorData);
+            DrawBuildingFloor(top, left, bottom, right, baseHeights, floorId, floorData);
 
             DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
 
@@ -594,7 +594,7 @@ namespace MinecraftMapper {
             DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors);
         }
 
-        private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int blockType, int data, int buildingHeight, int maxHeight) {
+        private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int blockType, int data, int buildingHeight, int maxHeight) {
             var start = building.BuildingNodes[0];
             var baseHeights = new Dictionary<BlockPosition, int>();
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
@@ -602,13 +602,17 @@ namespace MinecraftMapper {
                 var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
-                    if (!_conv.IsValidPoint(point.Block) || buildingPoints.Contains(point.Block)) {
+                    if (!_conv.IsValidPoint(point.Block)) {
                         continue;
                     }
                     // if we have duplicate entries for a building don't draw it twice...
-                    buildingPoints.Add(point.Block);
 
-                    var height = GetHeight(point.Block);
+                    int height;
+                    if (!buildingPoints.TryGetValue(point.Block, out height)) {
+                        height = GetHeight(point.Block);
+                        buildingPoints[point.Block] = height;
+                    }
+
                     baseHeights[point.Block] = height;
 
                     for (int j = 0; j < (maxHeight - height) + buildingHeight; j++) {
@@ -626,7 +630,7 @@ namespace MinecraftMapper {
             return baseHeights;
         }
 
-        private void DrawBuildingWindows(OsmReader.Building building, HashSet<BlockPosition> buildingPoints, int data, int buildingHeight, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> doors) {
+        private void DrawBuildingWindows(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int data, int buildingHeight, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> doors) {
             var start = building.BuildingNodes[0];
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
@@ -811,7 +815,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private HashSet<BlockPosition> DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+        private HashSet<BlockPosition> DrawBuildingSign(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Dictionary<BlockPosition, int> buildingPoints) {
             var doors = DrawSignItems(building, top, left, bottom, right, baseHeights, buildingPoints);
 
             if (building.Street == null || building.HouseNumber == null) {
@@ -990,7 +994,7 @@ namespace MinecraftMapper {
             return groundHeight;
         }
 
-        private HashSet<BlockPosition> DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> buildingPoints) {
+        private HashSet<BlockPosition> DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Dictionary<BlockPosition, int> buildingPoints) {
             HashSet<BlockPosition> doors = new HashSet<BlockPosition>();
             if (building.SignItems == null) {
                 return doors;
@@ -1045,7 +1049,7 @@ namespace MinecraftMapper {
                 }
 
                 // And walk that point back into the closest building point
-                while (!buildingPoints.Contains(targetPoint) && 
+                while (!buildingPoints.ContainsKey(targetPoint) && 
                     targetPoint.X >= left - 1 && 
                     targetPoint.X <= right + 1 && 
                     targetPoint.Z >= top - 1 && 
@@ -1079,7 +1083,7 @@ namespace MinecraftMapper {
                 signPoints[targetPoint] = signNode;
 
                 // And finally bump it out to the outside of the building
-                if (buildingPoints.Contains(buildingPoint)) {
+                if (buildingPoints.ContainsKey(buildingPoint)) {
                     DoorDirection doorDir = 0;
                     switch (dir) {
                         case Direction.East: doorDir = DoorDirection.West; break;
@@ -1247,7 +1251,7 @@ namespace MinecraftMapper {
             ),
         };
 
-        private void DrawBuildingRoof(OsmReader.Building building, int top, int left, int bottom, int right, int buildingHeight, int maxHeight, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints) {
+        private void DrawBuildingRoof(OsmReader.Building building, int top, int left, int bottom, int right, int buildingHeight, int maxHeight, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints) {
             // OAKWOAD_STAIRS
             // SPRUCEWOOD_STAIRS
             // BIRCHWOOD_STAIRS
@@ -1304,7 +1308,7 @@ namespace MinecraftMapper {
             return roofMapping;
         }
 
-        private void DrawGabledRoof(OsmReader.Building building, int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
+        private void DrawGabledRoof(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
             var height = Math.Abs(top - bottom);
             var width = Math.Abs(left - right);
 
@@ -1312,13 +1316,13 @@ namespace MinecraftMapper {
                 for (int x = left; x <= right; x++) {
                     int tStart = -1, bStart = -1;
                     for (int y = top; y <= bottom; y++) {
-                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                             tStart = y;
                             break;
                         }
                     }
                     for (int y = top; y >= bottom; y--) {
-                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                             bStart = y;
                             break;
                         }
@@ -1362,13 +1366,13 @@ namespace MinecraftMapper {
                 for (int y = top; y <= bottom; y++) {
                     int lStart = -1, rStart = -1;
                     for (int x = left; x <= right; x++) {
-                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                             lStart = x;
                             break;
                         }
                     }
                     for (int x = right; x >= left; x--) {
-                        if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                        if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                             rStart = x;
                             break;
                         }
@@ -1411,18 +1415,18 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawHippedRoof(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
+        private void DrawHippedRoof(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int dataType, int roofStart, int stairType, int baseType) {
             for (int z = top; z <= bottom; z++) {
                 //int tStart = -1, bStart = -1;
                 int lStart = -1, rStart = -1;
                 for (int x = left; x <= right; x++) {
-                    if (buildingPositions.Contains(new BlockPosition(x, z))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, z))) {
                         lStart = x;
                         break;
                     }
                 }
                 for (int x = right; x >= left; x--) {
-                    if (buildingPositions.Contains(new BlockPosition(x, z))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, z))) {
                         rStart = x;
                         break;
                     }
@@ -1468,17 +1472,17 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawFlatRoof(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping) {
+        private void DrawFlatRoof(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping) {
             for (int y = top; y <= bottom; y++) {
                 int lStart = -1, rStart = -1;
                 for (int x = left; x <= right; x++) {
-                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                         lStart = x;
                         break;
                     }
                 }
                 for (int x = right; x >= left; x--) {
-                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                         rStart = x;
                         break;
                     }
@@ -1494,30 +1498,52 @@ namespace MinecraftMapper {
                 }
             }
         }
-
-        private void DrawBuildingFloor(int top, int left, int bottom, int right, HashSet<BlockPosition> buildingPositions, int blockType, int blockData) {
-            for (int y = top; y <= bottom; y++) {
-                int lStart = -1, rStart = -1;
-                for (int x = left; x <= right; x++) {
-                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
-                        lStart = x + 1;
-                        break;
-                    }
+        static BlockPosition[] _queueDirs = new[] {
+            new BlockPosition(1, 0),
+            new BlockPosition(-1, 0),
+            new BlockPosition(0, 1),
+            new BlockPosition(0, -1),
+        };
+        private void DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, int blockType, int blockData) {
+            // First find a point in the building.  We start at the mid-point,
+            // walk to hit a wall, and keep on walking until we hit a non-wall.
+            int centerX = (left + right) / 2;
+            bool hitBuilding = false;
+            BlockPosition? startPoint = null;
+            for (int z = top; z <= bottom; z++) {
+                if (baseHeights.ContainsKey(new BlockPosition(centerX, z))) {
+                    hitBuilding = true;
+                } else if (hitBuilding) {
+                    startPoint = new BlockPosition(centerX, z);
+                    break;
                 }
-                for (int x = right; x >= left; x--) {
-                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
-                        rStart = x - 1;
-                        break;
-                    }
-                }
+            }
+            if (startPoint == null || !_conv.IsValidPoint(startPoint.Value)) {
+                return;
+            }
+            int newPoints = 0;
+            Queue<BlockPosition> points = new Queue<BlockPosition>();
+            points.Enqueue(startPoint.Value);
 
-                for (int x = lStart; x <= rStart; x++) {
-                    if (buildingPositions.Contains(new BlockPosition(x, y))) {
+            HashSet<BlockPosition> floorPoints = new HashSet<BlockPosition>();
+            floorPoints.Add(startPoint.Value);
+            while (points.Count != 0) {
+                var next = points.Dequeue();
+                
+                var height = GetHeight(next);
+                newPoints++;
+                _bm.SetID(next.X, height, next.Z, blockType);
+                _bm.SetData(next.X, height, next.Z, blockData);
+
+                for (int i = 0; i < _queueDirs.Length; i++) {
+                    var cand = new BlockPosition(next.X + _queueDirs[i].X, next.Z + _queueDirs[i].Z);
+                    if (cand.X < left || cand.X > right || cand.Z < top || cand.Z > bottom) {
                         continue;
                     }
-                    var height = GetHeight(new BlockPosition(x, y));
-                    _bm.SetID(x, height, y, blockType);
-                    _bm.SetData(x, height, y, blockData);
+                    if (!baseHeights.ContainsKey(cand) && !floorPoints.Contains(cand)) {
+                        floorPoints.Add(cand);
+                        points.Enqueue(cand);
+                    }
                 }
             }
         }
@@ -1682,6 +1708,9 @@ namespace MinecraftMapper {
                             way.Layer != null) {
                             continue;
                         }
+                    }
+                    if (way.Id == 396055523) {
+                        Console.WriteLine("hey");
                     }
 
                     WriteLine("{0} ({1}/{2})", way.Name, cur, _reader.Ways.Count);
@@ -2982,17 +3011,17 @@ namespace MinecraftMapper {
             } else {
                 startFixUp = (width - 1) - (width / 2);
             }
-            int D = 2 * dy - dx;
+            int D = 2 * dx - dy;
             // fix up our start point so that we're centering on thickness...
-            for (int i = 0; i < width / 2; i++) {
+            for (int i = 0; i < startFixUp; i++) {
                 x0--;
                 x1--;
                 if (D >= 0) {
                     y0 += xi;
                     y1 += xi;
-                    D -= dx * 2;
+                    D -= dy * 2;
                 }
-                D += dy * 2;
+                D += dx * 2;
             }
             D = 2 * dx - dy;
             int x = x0;
@@ -3014,19 +3043,19 @@ namespace MinecraftMapper {
             }
 
             // then draw the additional lines...
-            D = 2 * dy - dx;
+            D = 2 * dx - dy;
             if (width != 1) {
                 for (int i = 1; i < width; i++) {
                     x0++;
                     x1++;
                     bool drawOverlap = false;
                     if (D >= 0) {
-                        y0-=xi;
-                        y1-=xi;
-                        D -= 2 * dx;
+                        y0 -= xi;
+                        y1 -= xi;
+                        D -= 2 * dy;
                         drawOverlap = true;
                     }
-                    D += 2 * dy;
+                    D += 2 * dx;
                     foreach (var value in PlotLineHigh(x0, y0, x1, y1, 1, drawOverlap, i)) {
                         yield return value;
                     }
@@ -3045,7 +3074,7 @@ namespace MinecraftMapper {
             } else {
                 startFixUp = (width - 1) - (width / 2);
             }
-            int D = 2 * dx - dy;
+            int D = 2 * dy - dx;
             // fix up our start point so that we're centering on thickness...
             for (int i = 0; i < startFixUp; i++) {
                 y0--;
@@ -3053,9 +3082,9 @@ namespace MinecraftMapper {
                 if (D >= 0) {
                     x0 += yi;
                     x1 += yi;
-                    D -= dy * 2;
+                    D -= dx * 2;
                 }
-                D += dx * 2;
+                D += dy * 2;
             }
 
             // then draw the line...
@@ -3078,7 +3107,7 @@ namespace MinecraftMapper {
             }
 
             // then draw the additional lines...
-            D = 2 * dx - dy;
+            D = 2 * dy - dx;
             if (width != 1) {
                 for (int i = 1; i < width; i++) {
                     y0++;
@@ -3087,10 +3116,10 @@ namespace MinecraftMapper {
                     if (D >= 0) {
                         x0 -= yi;
                         x1 -= yi;
-                        D -= 2 * dy;
+                        D -= 2 * dx;
                         drawOverlap = true;
                     }
-                    D += 2 * dx;
+                    D += 2 * dy;
                     foreach (var value in PlotLineLow(x0, y0, x1, y1, 1, drawOverlap, i)) {
                         yield return value;
                     }
