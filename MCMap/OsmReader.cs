@@ -17,6 +17,7 @@ namespace MinecraftMapper {
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
         public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
         public readonly Dictionary<Node, List<Way>> RoadsByNode = new Dictionary<Node, List<Way>>();
+        public readonly List<AmenityNode> Amenities = new List<AmenityNode>();
         private readonly string _sourceXml;
 
         public class SignInfo {
@@ -76,7 +77,7 @@ namespace MinecraftMapper {
           
             public AmenityNode(double lat, double lng, long id, Amenity amenity, string name, string houseNumber, string street, int? stories) : 
                 base(lat, lng, id, name, houseNumber, street, stories) {
-                this.Amenity = amenity;
+                Amenity = amenity;
             }
 
             public override string ToString() {
@@ -91,12 +92,12 @@ namespace MinecraftMapper {
         }
 
         public class ShopNode : Node {
-            private Shop Shop;
-            private string Name;
+            public readonly Shop Shop;
+            public readonly string Name;
 
             public ShopNode(double lat, double lng, Shop shop, string name) : base(lat, lng) {
-                this.Shop = shop;
-                this.Name = name;
+                Shop = shop;
+                Name = name;
             }
 
             public override string ToString() {
@@ -197,7 +198,8 @@ namespace MinecraftMapper {
             University,
             Police,
             PostOffice,
-            Prison
+            Prison,
+            BicycleParking
         }
 
         public enum Sidewalk {
@@ -346,7 +348,11 @@ namespace MinecraftMapper {
                         
                         if (tags.amenity != Amenity.None) {
                             includeInOrder = true;
-                            newNode = new AmenityNode(lat, longitude, id, tags.amenity, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
+                            var amenity = new AmenityNode(lat, longitude, id, tags.amenity, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
+                            if (tags.amenity == Amenity.BicycleParking) {
+                                Amenities.Add(amenity);
+                            }
+                            newNode = amenity;
                         } else if (tags.houseNumber != null && tags.street != null) {
                             includeInOrder = true;
                             newNode = new AddressNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
@@ -1166,7 +1172,7 @@ namespace MinecraftMapper {
                 case "public_building": break;
                 case "fountain": break;
                 case "drinking_water": break;
-                case "bicycle_parking": break;
+                case "bicycle_parking": amenity = Amenity.BicycleParking;  break;
                 case "bench": break;
                 case "waste_basket": break;
                 case "pharmacy": break;

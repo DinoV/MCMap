@@ -123,9 +123,29 @@ namespace MinecraftMapper {
 
                 Save();
 
-
                 DrawBarriers(buildingPoints);
 
+                foreach (var node in _reader.Amenities) {
+                    var point = _conv.ToBlock(node.Lat, node.Long);
+                    _bm.SetID(
+                        point.X,
+                        _bm.GetHeight(point.X, point.Z) + 1,
+                        point.Z,
+                        BlockType.NETHER_BRICK_FENCE
+                    );
+                    _bm.SetID(
+                        point.X + 1,
+                        _bm.GetHeight(point.X + 1, point.Z) + 1,
+                        point.Z,
+                        BlockType.NETHER_BRICK_FENCE
+                    );
+                    _bm.SetID(
+                        point.X + 2 ,
+                        _bm.GetHeight(point.X + 2, point.Z) + 1,
+                        point.Z,
+                        BlockType.NETHER_BRICK_FENCE
+                    );
+                }
                 Save();
             } catch (Exception e) {
                 Save();
@@ -583,13 +603,13 @@ namespace MinecraftMapper {
 
             var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
 
-            DrawBuildingFloor(top, left, bottom, right, baseHeights, building);
+            var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
+
+            int floorHeight = DrawBuildingFloor(top, left, bottom, right, baseHeights, building, buildingHeight, doors);
 
             DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
 
-            var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
-
-            DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors);
+            DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors, floorHeight);
         }
 
         private int CalculateBounds(OsmReader.Node[] nodes, out int top, out int left, out int bottom, out int right) {
@@ -657,7 +677,9 @@ namespace MinecraftMapper {
             return baseHeights;
         }
 
-        private void DrawBuildingWindows(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int data, int buildingHeight, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> doors) {
+        const int defaultWindowHeight = 2;
+        const int defaultWindowSpacing = 2;
+        private void DrawBuildingWindows(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int data, int buildingHeight, Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> doors, int floorHeight) {
             var start = building.BuildingNodes[0];
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
@@ -689,8 +711,8 @@ namespace MinecraftMapper {
                 int remaining = dist - 2;
                 int startIndex = 1;
 
-                int windowHeight = 3;
-                int verticalDistance = 3;
+                int windowHeight = defaultWindowHeight;
+                int verticalDistance = defaultWindowSpacing;
                 int verticalOffset = 0;
 
                 int blockType = BlockType.GLASS_PANE;
@@ -751,7 +773,7 @@ namespace MinecraftMapper {
                         }
                         // we want the windows to line up even across elevation changes,
                         // so we base them upon the ground level from maxGroundHeight.
-                        int baseHeight = j - (maxGroundHeight - height);
+                        int baseHeight = j - (floorHeight - height);
                         if (baseHeight <= 0) {
                             // don't place windows below ground
                             continue;
@@ -1500,28 +1522,28 @@ namespace MinecraftMapper {
         }
 
         private void DrawFlatRoof(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping) {
-            for (int y = top; y <= bottom; y++) {
+            for (int z = top; z <= bottom; z++) {
                 int lStart = -1, rStart = -1;
                 for (int x = left; x <= right; x++) {
-                    if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, z))) {
                         lStart = x;
                         break;
                     }
                 }
                 for (int x = right; x >= left; x--) {
-                    if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
+                    if (buildingPositions.ContainsKey(new BlockPosition(x, z))) {
                         rStart = x;
                         break;
                     }
                 }
 
                 for (int x = lStart; x <= rStart; x++) {
-                    if (roofPoints.Contains(new BlockPosition(x, y))) {
+                    if (roofPoints.Contains(new BlockPosition(x, z))) {
                         continue;
                     }
-                    _bm.SetID(x, roofStart, y, roofMapping.VerticalBlockType);
-                    _bm.SetData(x, roofStart, y, roofMapping.VerticalBlockData);
-                    roofPoints.Add(new BlockPosition(x, y));
+                    _bm.SetID(x, roofStart, z, roofMapping.VerticalBlockType);
+                    _bm.SetData(x, roofStart, z, roofMapping.VerticalBlockData);
+                    roofPoints.Add(new BlockPosition(x, z));
                 }
             }
         }
@@ -1532,7 +1554,8 @@ namespace MinecraftMapper {
             new BlockPosition(0, -1),
         };
 
-        private void DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, OsmReader.Building building) {
+        private int DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, OsmReader.Building building, int buildingHeight, HashSet<BlockPosition> doors) {
+            int storyCount = buildingHeight / (defaultWindowHeight + defaultWindowSpacing); // matching current values in 
             int blockType = 0, blockData = 0;
             switch (building.Id % 14) {
                 case 0:
@@ -1553,20 +1576,305 @@ namespace MinecraftMapper {
                 case 12:
                 case 13:
                     blockType = BlockType.STONE_SLAB;
-                    blockData = (int)(((building.Id % 14) - 6)) | 0x08;
+                    blockData = (int)((building.Id % 8)) | 0x08;
                     break;
             }
 
-            FillArea(top, left, bottom, right, baseHeights, blockType, blockData);
+            int maxHeight, minHeight, avgHeight;
+            var floorPoints = GetFloorPoints(top, left, bottom, right, baseHeights, out minHeight, out maxHeight, out avgHeight);
+
+            foreach (var door in doors) {
+                // if we have a door that's lower than the avg floor height
+                // let's adjust to the door height instead
+                if (baseHeights[door] < avgHeight) {
+                    avgHeight = baseHeights[door];
+                } else if (baseHeights[door] > avgHeight) {
+                }
+            }
+            
+            foreach (var point in floorPoints) {
+                var height = GetHeight(point);
+
+                // Smooth out building interiors somewhat...
+                if (maxHeight - minHeight <= 2) {
+                    if (height == avgHeight + 1) {
+                        _bm.SetID(point.X, height, point.Z, BlockType.AIR);
+                        _bm.SetData(point.X, height, point.Z, 0);
+                        height--;
+                    } else if (height == avgHeight - 1) {
+                        height++;
+                    }
+                }
+                _bm.SetID(point.X, height, point.Z, blockType);
+                _bm.SetData(point.X, height, point.Z, blockData);
+                if ((point.X - left) % 8 == 0 && (point.Z - top) % 8 == 0) {
+                    _bm.SetID(point.X, height + 1, point.Z, BlockType.TORCH);
+                    _bm.SetData(point.X, height + 1, point.Z, 5);
+                }
+            }
+
+            var stairType = GetStairsForBlock(blockType, blockData);
+            if (maxHeight - minHeight <= 2) {
+                foreach (var door in doors) {
+                    // if we dropped the floor in front of a door let's add a step back up
+                    if (baseHeights[door] > avgHeight) {
+                        DrawDoorStairs(baseHeights, floorPoints, door, stairType);
+                    }
+                }
+            }
+            if (storyCount > 1) {
+                List<StairInfo> stairs = GetStairLocations(top, left, bottom, right, building, floorPoints);
+
+                for (int i = 1; i < storyCount; i++) {
+                    HashSet<BlockPosition> stairPoints = new HashSet<BlockPosition>();
+                    foreach (var stair in stairs) {
+                        DrawStairs(blockType, blockData, i, stairPoints, stair);
+                    }
+
+                    foreach (var point in floorPoints) {
+                        if (stairPoints.Contains(point)) {
+                            continue;
+                        }
+
+                        int height = avgHeight + (defaultWindowHeight + defaultWindowSpacing) * i;
+                        _bm.SetID(point.X, height, point.Z, blockType);
+                        _bm.SetData(point.X, height, point.Z, blockData);
+                        if ((point.X - left) % 8 == 0 && (point.Z - top) % 8 == 0) {
+                            _bm.SetID(point.X, height + 1, point.Z, BlockType.TORCH);
+                            _bm.SetData(point.X, height + 1, point.Z, 5);
+                        }
+                    }
+                }
+            }
+            return avgHeight;
         }
 
-        private void FillArea(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, int blockType, int blockData) {
+        private void DrawStairs(int blockType, int blockData, int story, HashSet<BlockPosition> stairPoints, StairInfo stair) {
+            BlockPosition pos;
+
+            switch (stair.Dir) {
+                case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor, stair.Z); break;
+                case FullDirection.North: pos = new BlockPosition(stair.X, stair.Z + StepCountPerFloor); break;
+                case FullDirection.East: pos = new BlockPosition(stair.X, stair.Z); break;
+                case FullDirection.South: pos = new BlockPosition(stair.X, stair.Z); break;
+                default:
+                    throw new InvalidOperationException();
+            }
+
+            var height = GetHeight(pos);
+            if (story > 1) {
+                height += (defaultWindowHeight + defaultWindowSpacing) - 1;
+            }
+
+            for (int step = 0; step < StepCountPerFloor; step++) {
+                for (int width = 0; width < StairsWidth; width++) {
+                    switch (stair.Dir) {
+                        case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor - step, stair.Z + width); break;
+                        case FullDirection.North: pos = new BlockPosition(stair.X + width, stair.Z + StepCountPerFloor - step); break;
+                        case FullDirection.East: pos = new BlockPosition(stair.X + step, stair.Z + width); break;
+                        case FullDirection.South: pos = new BlockPosition(stair.X + width, stair.Z + step); break;
+                        default:
+                            throw new InvalidOperationException();
+                    }
+                    _bm.SetID(pos.X, height + 1, pos.Z, blockType);
+                    if ((step & 0x01) == 0) {
+                        _bm.SetData(pos.X, height + 1, pos.Z, blockData & ~0x08);
+                    } else {
+                        _bm.SetData(pos.X, height + 1, pos.Z, blockData | 0x08);
+                    }
+                    stairPoints.Add(pos);
+                }
+                if ((step & 0x01) != 0) {
+                    height++;
+                }
+            }
+        }
+
+        const int StepCountPerFloor = 7;
+        const int StairsWidth = 3;
+
+
+        private static List<StairInfo> GetStairLocations(int top, int left, int bottom, int right, OsmReader.Building building, HashSet<BlockPosition> floorPoints) {
+            List<StairInfo> stairs = new List<StairInfo>();
+            var random = new Random((int)building.Id);
+            HashSet<BlockPosition> stairPoints = new HashSet<BlockPosition>();
+            for (int i = 0; i < Math.Max(1, floorPoints.Count / 800); i++) {
+                var start = building.BuildingNodes[0];
+                int z = 0, x = 0;
+                bool ok = false;
+                FullDirection dir = (FullDirection)(random.Next() % 4);
+                for (int attempt = 0; attempt < 10 && !ok; attempt++) {
+                    z = random.Next(top + 2, bottom - 2);
+                    x = random.Next(left + 2, right - 2);
+
+                    ok = true;
+                    for (int step = 0; step < StepCountPerFloor && ok; step++) {
+                        for (int width = 0; width < StairsWidth; width++) {
+                            BlockPosition pos;
+                            if (dir == FullDirection.East || dir == FullDirection.West) {
+                                pos = new BlockPosition(x + step, z + width);
+                            } else {
+                                pos = new BlockPosition(x + width, z + step);
+                            }
+                            
+                            if (!floorPoints.Contains(pos) || stairPoints.Contains(pos)) {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (ok) {
+                    for (int step = 0; step < 4 && ok; step++) {
+                        for (int width = 0; width < 3; width++) {
+                            BlockPosition pos;
+                            if (dir == FullDirection.East || dir == FullDirection.West) {
+                                pos = new BlockPosition(x + step, z + width);
+                            } else {
+                                pos = new BlockPosition(x + width, z + step);
+                            }
+                            stairPoints.Add(pos);
+                        }
+                    }
+                    stairs.Add(new StairInfo(dir, x, z));
+                }
+            }
+
+            return stairs;
+        }
+
+        struct StairInfo {
+            public readonly FullDirection Dir;
+            public readonly int X, Z;
+
+            public StairInfo(FullDirection dir, int x, int z) {
+                Dir = dir;
+                X = x;
+                Z = z;
+            }
+        }
+
+        private void DrawDoorStairs(Dictionary<BlockPosition, int> baseHeights, HashSet<BlockPosition> floorPoints, BlockPosition door, int stairType) {
+            if (floorPoints.Contains(new BlockPosition(door.X - 1, door.Z))) {
+                _bm.SetID(door.X - 1, baseHeights[door], door.Z, stairType);
+                _bm.SetData(door.X - 1, baseHeights[door], door.Z, (int)FullDirection.East);
+                if (floorPoints.Contains(new BlockPosition(door.X - 1, door.Z - 1))) {
+                    _bm.SetID(door.X - 1, baseHeights[door], door.Z - 1, stairType);
+                    _bm.SetData(door.X - 1, baseHeights[door], door.Z - 1, (int)FullDirection.East);
+                }
+                if (floorPoints.Contains(new BlockPosition(door.X - 1, door.Z + 1))) {
+                    _bm.SetID(door.X - 1, baseHeights[door], door.Z + 1, stairType);
+                    _bm.SetData(door.X - 1, baseHeights[door], door.Z + 1, (int)FullDirection.East);
+                }
+            } else if (floorPoints.Contains(new BlockPosition(door.X + 1, door.Z))) {
+                _bm.SetID(door.X + 1, baseHeights[door], door.Z, stairType);
+                _bm.SetData(door.X + 1, baseHeights[door], door.Z, (int)FullDirection.West);
+                if (floorPoints.Contains(new BlockPosition(door.X + 1, door.Z - 1))) {
+                    _bm.SetID(door.X + 1, baseHeights[door], door.Z - 1, stairType);
+                    _bm.SetData(door.X + 1, baseHeights[door], door.Z - 1, (int)FullDirection.West);
+                }
+                if (floorPoints.Contains(new BlockPosition(door.X + 1, door.Z + 1))) {
+                    _bm.SetID(door.X + 1, baseHeights[door], door.Z + 1, stairType);
+                    _bm.SetData(door.X + 1, baseHeights[door], door.Z + 1, (int)FullDirection.West);
+                }
+            } else if (floorPoints.Contains(new BlockPosition(door.X, door.Z - 1))) {
+                _bm.SetID(door.X, baseHeights[door], door.Z - 1, stairType);
+                _bm.SetData(door.X, baseHeights[door], door.Z - 1, (int)FullDirection.North);
+                if (floorPoints.Contains(new BlockPosition(door.X - 1, door.Z - 1))) {
+                    _bm.SetID(door.X - 1, baseHeights[door], door.Z - 1, stairType);
+                    _bm.SetData(door.X - 1, baseHeights[door], door.Z - 1, (int)FullDirection.North);
+                }
+                if (floorPoints.Contains(new BlockPosition(door.X + 1, door.Z - 1))) {
+                    _bm.SetID(door.X + 1, baseHeights[door], door.Z - 1, stairType);
+                    _bm.SetData(door.X + 1, baseHeights[door], door.Z - 1, (int)FullDirection.North);
+                }
+            } else if (floorPoints.Contains(new BlockPosition(door.X, door.Z + 1))) {
+                _bm.SetID(door.X, baseHeights[door], door.Z + 1, stairType);
+                _bm.SetData(door.X, baseHeights[door], door.Z + 1, (int)FullDirection.South);
+                if (floorPoints.Contains(new BlockPosition(door.X - 1, door.Z + 1))) {
+                    _bm.SetID(door.X - 1, baseHeights[door], door.Z + 1, stairType);
+                    _bm.SetData(door.X - 1, baseHeights[door], door.Z + 1, (int)FullDirection.South);
+                }
+                if (floorPoints.Contains(new BlockPosition(door.X + 1, door.Z + 1))) {
+                    _bm.SetID(door.X + 1, baseHeights[door], door.Z + 1, stairType);
+                    _bm.SetData(door.X + 1, baseHeights[door], door.Z + 1, (int)FullDirection.South);
+                }
+            }
+        }
+
+        private static int GetStairsForBlock(int blockType, int blockData) {
+            switch (blockType) {
+                case BlockType.STONE_SLAB:
+                    switch (blockData & 0x07) {
+                        case 0:
+                        case 1:
+                            blockType = BlockType.SANDSTONE_STAIRS;
+                            break;
+                        case 2:
+                            blockType = BlockType.STONE_BRICK_STAIRS;
+                            break;
+                        case 3:
+                            blockType = BlockType.COBBLESTONE_STAIRS;
+                            break;
+                        case 4:
+                            blockType = BlockType.BRICK_STAIRS;
+                            break;
+                        case 5:
+                            blockType = BlockType.STONE_BRICK_STAIRS;
+                            break;
+                        case 6:
+                            blockType = BlockType.NETHER_BRICK;
+                            break;
+                        case 7:
+                            blockType = BlockType.QUARTZ_STAIRS;
+                            break;
+                        default:
+                            Console.WriteLine("Huh?");
+                            break;
+                    }
+                    break;
+                case BlockType.WOOD_SLAB:
+                    switch (blockData & 0x07) {
+                        case 0: blockType = BlockType.WOOD_STAIRS; break;
+                        case 1: blockType = BlockType.SPRUCE_WOOD_STAIRS; break;
+                        case 2: blockType = BlockType.BIRCH_WOOD_STAIRS; break;
+                        case 3: blockType = BlockType.JUNGLE_WOOD_STAIRS; break;
+                        case 4: blockType = BlockType.ACACIA_WOOD_STAIRS; break;
+                        case 5: blockType = BlockType.DARK_OAK_WOOD_STAIRS; break;
+                        default:
+                            Console.WriteLine("Huh?");
+                            break;
+                    }
+                    break;
+                default:
+                    Console.WriteLine("Huh?");
+                    break;
+            }
+
+            return blockType;
+        }
+
+        private int FillArea(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, int blockType, int blockData, int? fillHeight = null) {
+            int maxHeight, minHeight, avgHeight;
+            foreach (var point in GetFloorPoints(top, left, bottom, right, baseHeights, out maxHeight, out minHeight, out avgHeight)) {
+                var height = fillHeight ?? GetHeight(point);
+
+                _bm.SetID(point.X, height, point.Z, blockType);
+                _bm.SetData(point.X, height, point.Z, blockData);
+            }
+            return maxHeight;
+        }
+
+        private HashSet<BlockPosition> GetFloorPoints(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, out int minHeight, out int maxHeight, out int avgHeight) {
             // First find a point in the building.  We start at the mid-point,
             // walk to hit a wall, and keep on walking until we hit a non-wall.
             int centerX = (left + right) / 2;
             BlockPosition? startPoint = null;
             bool hitBuilding = false;
-                
+            maxHeight = Int32.MinValue;
+            minHeight = Int32.MaxValue;
+            avgHeight = 0;
+
             for (int z = top; z <= bottom; z++) {
                 if (baseHeights.ContainsKey(new BlockPosition(centerX, z))) {
                     hitBuilding = true;
@@ -1576,7 +1884,7 @@ namespace MinecraftMapper {
                 }
             }
             if (startPoint == null || !_conv.IsValidPoint(startPoint.Value)) {
-                return;
+                return new HashSet<BlockPosition>();
             }
             int newPoints = 0;
             Queue<BlockPosition> points = new Queue<BlockPosition>();
@@ -1584,13 +1892,15 @@ namespace MinecraftMapper {
 
             HashSet<BlockPosition> floorPoints = new HashSet<BlockPosition>();
             floorPoints.Add(startPoint.Value);
+            int allHeights = 0;
             while (points.Count != 0) {
                 var next = points.Dequeue();
 
                 var height = GetHeight(next);
+                allHeights += height;
+                maxHeight = Math.Max(height, maxHeight);
+                minHeight = Math.Min(height, minHeight);
                 newPoints++;
-                _bm.SetID(next.X, height, next.Z, blockType);
-                _bm.SetData(next.X, height, next.Z, blockData);
 
                 for (int i = 0; i < _queueDirs.Length; i++) {
                     var cand = new BlockPosition(next.X + _queueDirs[i].X, next.Z + _queueDirs[i].Z);
@@ -1603,6 +1913,11 @@ namespace MinecraftMapper {
                     }
                 }
             }
+            if (floorPoints.Count > 0) {
+                var tmpAvg = (float)allHeights / floorPoints.Count;
+                avgHeight = (int)Math.Round(tmpAvg);
+            }
+            return floorPoints;
         }
 
         private static OsmReader.Node NextClosestPoint(OsmReader.Node from, OsmReader.Node closestPoint, IEnumerable<OsmReader.Node> points) {
