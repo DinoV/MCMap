@@ -113,6 +113,10 @@ namespace MinecraftMapper {
             try {
                 WriteLine("{0} roads", _reader.Ways.Count);
 
+                DrawLandUses();
+
+                DrawLeisures();
+
                 DrawParkingLots();
 
                 var roadPoints = DrawRoads();
@@ -140,7 +144,7 @@ namespace MinecraftMapper {
                         BlockType.NETHER_BRICK_FENCE
                     );
                     _bm.SetID(
-                        point.X + 2 ,
+                        point.X + 2,
                         _bm.GetHeight(point.X + 2, point.Z) + 1,
                         point.Z,
                         BlockType.NETHER_BRICK_FENCE
@@ -156,6 +160,101 @@ namespace MinecraftMapper {
             Console.ReadLine();
         }
 
+        private void DrawLandUses() {
+            foreach (var landUse in _reader.LandUses) {
+                var start = landUse.Nodes[0];
+                Dictionary<BlockPosition, int> wallPoints = new Dictionary<BlockPosition, int>();
+                int top, left, bottom, right;
+                CalculateBounds(landUse.Nodes, out top, out left, out bottom, out right);
+
+                for (int i = 0; i < landUse.Nodes.Length; i++) {
+
+                    var from = _conv.ToBlock(start.Lat, start.Long);
+                    var to = _conv.ToBlock(landUse.Nodes[i].Lat, landUse.Nodes[i].Long);
+
+                    foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                        wallPoints[point.Block] = 0;
+                    }
+                    start = landUse.Nodes[i];
+                }
+                var rand = new Random((int)landUse.WayId);
+                FillArea(top, left, bottom, right, wallPoints, point => {
+                    switch (rand.Next() % 48) {
+                        case 0: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.PUMPKIN); break;
+                        case 1: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.COCOA_PLANT); break;
+                        case 2: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.CROPS); break;
+                        case 3: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.DEAD_SHRUB); break;
+                        case 4: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.FARMLAND); break;
+                        case 5: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.FLOWER_POT); break;
+                        case 6: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.GRASS); break;
+                        case 7: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.HAY_BLOCK); break;
+                        case 8: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.HUGE_BROWN_MUSHROOM); break;
+                        case 9: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.HUGE_RED_MUSHROOM); break;
+                        case 10: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.MELON); break;
+                        case 11: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.MELON_STEM); break;
+                        case 12: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.MYCELIUM); break;
+                        case 13: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.POTATOES); break;
+                        case 14: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.PUMPKIN_STEM); break;
+                        case 15: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.RED_ROSE); break;
+                        case 16: _bm.SetID(point.X, GetHeight(point) + 1, point.Z, (int)BlockType.SUGAR_CANE); break;
+                        default:
+                            _bm.SetID(point.X, GetHeight(point), point.Z, (int)BlockType.FARMLAND); break;
+                    }
+                    _bm.SetData(point.X, GetHeight(point) + 1, point.Z, 0);
+                });
+            }
+        }
+
+        private bool FillMissingFence(BlockPosition prev, BlockPosition cur, BlockPosition compare) {
+            if (prev.Equals(compare)) {
+                var point = new BlockPosition(cur.X, prev.Z);
+                _bm.SetID(point.X, GetHeight(point) + 1, point.Z, BlockType.FENCE);
+                _bm.SetData(point.X, GetHeight(point) + 1, point.Z, 0);
+                return true;
+            }
+            return false;
+        }
+
+        private void DrawLeisures() {
+            foreach (var landUse in _reader.Leisures) {
+                var start = landUse.Nodes[0];
+
+                int count = 0;
+                BlockPosition? prev = null;
+                for (int i = 1; i < landUse.Nodes.Length; i++) {
+                    var from = _conv.ToBlock(start.Lat, start.Long);
+                    var to = _conv.ToBlock(landUse.Nodes[i].Lat, landUse.Nodes[i].Long);
+
+                    bool first = true;
+                    foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                        if (first || prev == null || (++count % 10) != 0) {
+                            if (prev != null) {
+
+                                bool filled = FillMissingFence(prev.Value, point.Block, new BlockPosition(point.Block.X - 1, point.Block.Z - 1)) ||
+                                     FillMissingFence(prev.Value, point.Block, new BlockPosition(point.Block.X + 1, point.Block.Z + 1)) ||
+                                     FillMissingFence(prev.Value, point.Block, new BlockPosition(point.Block.X + 1, point.Block.Z - 1)) ||
+                                     FillMissingFence(prev.Value, point.Block, new BlockPosition(point.Block.X - 1, point.Block.Z + 1));
+                            }
+                            _bm.SetID(point.Block.X, GetHeight(point.Block) + 1, point.Block.Z, BlockType.FENCE);
+                            _bm.SetData(point.Block.X, GetHeight(point.Block) + 1, point.Block.Z, 0);                            
+                        } else {
+                            _bm.SetID(point.Block.X, GetHeight(point.Block) + 1, point.Block.Z, BlockType.FENCE_GATE);
+                            if (prev.Value.X == point.Block.X - 1 || prev.Value.X == point.Block.X + 1) {
+                                _bm.SetData(point.Block.X, GetHeight(point.Block) + 1, point.Block.Z, (int)FullDirection.East);
+                            } else {
+                                _bm.SetData(point.Block.X, GetHeight(point.Block) + 1, point.Block.Z, (int)FullDirection.North);
+                            }
+                        }                        
+
+                        prev = point.Block;
+                        first = false;
+                    }
+                    start = landUse.Nodes[i];
+                }                
+            }
+        }
+
+
         private void DrawParkingLots() {
             foreach (var parking in _reader.ParkingLots) {
                 DrawParkingLot(parking);
@@ -167,7 +266,7 @@ namespace MinecraftMapper {
                 return;
             }
             int blockType = BlockType.CONCRETE;
-            int blockData = 0;
+            int blockData = 15; // black concrete
             var start = parking.Nodes[0];
             var baseHeights = new Dictionary<BlockPosition, int>();
             for (int i = 1; i < parking.Nodes.Length; i++) {
@@ -206,22 +305,33 @@ namespace MinecraftMapper {
                     SaveBlocks();
                 }
 
-                if (sign.Value == OsmReader.SignType.StreetLamp) {
+                if (sign.Value.Type == OsmReader.SignType.StreetLamp) {
                     var pos = _conv.ToBlock(sign.Key.Lat, sign.Key.Long);
-                    Direction dir = Direction.East;
-                    for (int i = 0; i < 10; i++) {
-                        if (roadPoints.ContainsKey(new BlockPosition(pos.X - 1, pos.Z))) {
-                            dir = Direction.East;
-                        } else if (roadPoints.ContainsKey(new BlockPosition(pos.X + 1, pos.Z))) {
-                            dir = Direction.West;
-                        } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z - 1))) {
-                            dir = Direction.South;
-                        } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z + 1))) {
-                            dir = Direction.North;
+                    Direction? dir = null;
+                    if (sign.Value.Direction != null) {
+                        switch (sign.Value.Direction) {
+                            case 0: dir = Direction.North; break;
+                            case 90: dir = Direction.East; break;
+                            case 180: dir = Direction.South; break;
+                            case 270: dir = Direction.West; break;
+                        }
+                    }
+                    if (dir == null) {
+                        dir = Direction.East;
+                        for (int i = 0; i < 10; i++) {
+                            if (roadPoints.ContainsKey(new BlockPosition(pos.X - 1, pos.Z))) {
+                                dir = Direction.East;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X + 1, pos.Z))) {
+                                dir = Direction.West;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z - 1))) {
+                                dir = Direction.South;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z + 1))) {
+                                dir = Direction.North;
+                            }
                         }
                     }
                     WriteLine("Lamp at {0} facing {1}", pos, dir);
-                    DrawStreetLamp(dir, pos);
+                    DrawStreetLamp(dir.Value, pos);
                 }
             }
         }
@@ -453,19 +563,19 @@ namespace MinecraftMapper {
                 for (int z = 0; z < 3; z++) {
                     var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
                     for (int x = -2; x <= 2; x++) {
-                        maxHeight = Math.Max(maxHeight, _bm.GetHeight(center.X + x, zLoc));
+                        maxHeight = Math.Max(maxHeight, GetHeight(center.X + x, zLoc));
                     }
                 }
                 for (int z = 0; z < 3; z++) {
                     var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
                     for (int x = -2; x <= 2; x++) {
                         for (int i = _bm.GetHeight(center.X + x, zLoc); i < maxHeight; i++) {
-                            _bm.SetID(center.X + x, _bm.GetHeight(center.X + x, zLoc), zLoc, BlockType.GRASS);
-                            _bm.SetData(center.X + x, _bm.GetHeight(center.X + x, zLoc), zLoc, 0);
+                            _bm.SetID(center.X + x, GetHeight(center.X + x, zLoc), zLoc, BlockType.GRASS);
+                            _bm.SetData(center.X + x, GetHeight(center.X + x, zLoc), zLoc, 0);
                         }
                     }
                 }
-                var height = maxHeight;
+                var height = maxHeight + 1;
                 // draw sides
                 for (int z = 0; z < 3; z++) {
                     var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
@@ -505,20 +615,20 @@ namespace MinecraftMapper {
                 for (int x = 0; x < 3; x++) {
                     var xLoc = direction == Direction.West ? center.X - x : center.X + x;
                     for (int z = -2; z <= 2; z++) {
-                        maxHeight = Math.Max(maxHeight, _bm.GetHeight(xLoc, center.Z + z));
+                        maxHeight = Math.Max(maxHeight, GetHeight(xLoc, center.Z + z));
                     }
                 }
                 for (int x = 0; x < 3; x++) {
                     var xLoc = direction == Direction.West ? center.X - x : center.X + x;
                     for (int z = -2; z <= 2; z++) {
-                        for (int i = _bm.GetHeight(xLoc, center.Z + z); i < maxHeight; i++) {
+                        for (int i = GetHeight(xLoc, center.Z + z); i < maxHeight; i++) {
                             _bm.SetID(xLoc, i, center.Z + z, BlockType.GRASS);
                             _bm.SetData(xLoc, i, center.Z + z, 0);
                         }
                     }
                 }
 
-                var height = maxHeight;
+                var height = maxHeight + 1;
                 // draw sides
                 for (int x = 0; x < 3; x++) {
                     var xLoc = direction == Direction.West ? center.X - x : center.X + x;
@@ -599,20 +709,21 @@ namespace MinecraftMapper {
             int buildingHeight = Math.Max(6, (int)((building.Stories ?? 1) * 4) + 2);
             var nodes = building.BuildingNodes;
             int top, left, bottom, right;
-            int groundMaxHeight = CalculateBounds(nodes, out top, out left, out bottom, out right);
+            int groundMaxHeight = CalculateBounds(nodes, out top, out left, out bottom, out right, buildingPoints);
 
             var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
 
             var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
 
-            int floorHeight = DrawBuildingFloor(top, left, bottom, right, baseHeights, building, buildingHeight, doors);
+            int floorHeight;
+            var floorPoints = DrawBuildingFloor(top, left, bottom, right, baseHeights, buildingPoints, building, buildingHeight, doors, out floorHeight);
 
-            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints);
+            DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints, floorPoints);
 
             DrawBuildingWindows(building, buildingPoints, data, buildingHeight, baseHeights, doors, floorHeight);
         }
 
-        private int CalculateBounds(OsmReader.Node[] nodes, out int top, out int left, out int bottom, out int right) {
+        private int CalculateBounds(OsmReader.Node[] nodes, out int top, out int left, out int bottom, out int right, Dictionary<BlockPosition, int> buildingPoints = null) {
             top = Int32.MaxValue;
             left = Int32.MaxValue;
             bottom = Int32.MinValue;
@@ -631,7 +742,10 @@ namespace MinecraftMapper {
 
                 foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
                     if (_conv.IsValidPoint(point.Block)) {
-                        var height = GetHeight(point.Block);
+                        int height;
+                        if (buildingPoints == null || !buildingPoints.TryGetValue(point.Block, out height)) {
+                            height = GetHeight(point.Block);
+                        } 
                         groundMaxHeight = Math.Max(groundMaxHeight, height);
                     }
                 }
@@ -1031,6 +1145,10 @@ namespace MinecraftMapper {
             _bm.SetData(signLoc.X, height.Value, signLoc.Z, (int)direction);
         }
 
+        private int GetHeight(int x, int z) {
+            return GetHeight(new BlockPosition(x, z));
+        }
+
         private int GetHeight(BlockPosition signLoc) {
             var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
             var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
@@ -1300,7 +1418,7 @@ namespace MinecraftMapper {
             ),
         };
 
-        private void DrawBuildingRoof(OsmReader.Building building, int top, int left, int bottom, int right, int buildingHeight, int maxHeight, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints) {
+        private void DrawBuildingRoof(OsmReader.Building building, int top, int left, int bottom, int right, int buildingHeight, int maxHeight, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, HashSet<BlockPosition> floorPoints) {
             // OAKWOAD_STAIRS
             // SPRUCEWOOD_STAIRS
             // BIRCHWOOD_STAIRS
@@ -1324,7 +1442,7 @@ namespace MinecraftMapper {
                 //default:
                 default:
                 case OsmReader.RoofType.Flat:
-                    DrawFlatRoof(top, left, bottom, right, buildingPositions, roofPoints, roofStart, roofMapping);
+                    DrawFlatRoof(top, left, bottom, right, buildingPositions, roofPoints, roofStart, roofMapping, floorPoints);
                     break;
                 case OsmReader.RoofType.Hipped: 
                     DrawHippedRoof(top, left, bottom, right, buildingPositions, roofPoints, dataType, roofStart, stairType, baseType);
@@ -1521,7 +1639,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private void DrawFlatRoof(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping) {
+        private void DrawFlatRoof(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> buildingPositions, HashSet<BlockPosition> roofPoints, int roofStart, ColorMapping roofMapping, HashSet<BlockPosition> floorPoints) {
             for (int z = top; z <= bottom; z++) {
                 int lStart = -1, rStart = -1;
                 for (int x = left; x <= right; x++) {
@@ -1538,12 +1656,14 @@ namespace MinecraftMapper {
                 }
 
                 for (int x = lStart; x <= rStart; x++) {
-                    if (roofPoints.Contains(new BlockPosition(x, z))) {
+                    var point = new BlockPosition(x, z);
+                    if (roofPoints.Contains(point) || 
+                        (!buildingPositions.ContainsKey(point) && !floorPoints.Contains(point))) {
                         continue;
                     }
                     _bm.SetID(x, roofStart, z, roofMapping.VerticalBlockType);
                     _bm.SetData(x, roofStart, z, roofMapping.VerticalBlockData);
-                    roofPoints.Add(new BlockPosition(x, z));
+                    roofPoints.Add(point);
                 }
             }
         }
@@ -1554,7 +1674,7 @@ namespace MinecraftMapper {
             new BlockPosition(0, -1),
         };
 
-        private int DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, OsmReader.Building building, int buildingHeight, HashSet<BlockPosition> doors) {
+        private HashSet<BlockPosition> DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Dictionary<BlockPosition, int> buildingPoints, OsmReader.Building building, int buildingHeight, HashSet<BlockPosition> doors, out int avgHeight) {
             int storyCount = buildingHeight / (defaultWindowHeight + defaultWindowSpacing); // matching current values in 
             int blockType = 0, blockData = 0;
             switch (building.Id % 14) {
@@ -1580,7 +1700,8 @@ namespace MinecraftMapper {
                     break;
             }
 
-            int maxHeight, minHeight, avgHeight;
+            int maxHeight, minHeight;
+            avgHeight = 0;
             var floorPoints = GetFloorPoints(top, left, bottom, right, baseHeights, out minHeight, out maxHeight, out avgHeight);
 
             foreach (var door in doors) {
@@ -1605,6 +1726,7 @@ namespace MinecraftMapper {
                         height++;
                     }
                 }
+                buildingPoints[point] = height;
                 _bm.SetID(point.X, height, point.Z, blockType);
                 _bm.SetData(point.X, height, point.Z, blockData);
                 if ((point.X - left) % 8 == 0 && (point.Z - top) % 8 == 0) {
@@ -1646,15 +1768,15 @@ namespace MinecraftMapper {
                     }
                 }
             }
-            return avgHeight;
+            return floorPoints;
         }
 
         private void DrawStairs(int blockType, int blockData, int story, HashSet<BlockPosition> stairPoints, StairInfo stair) {
             BlockPosition pos;
 
             switch (stair.Dir) {
-                case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor, stair.Z); break;
-                case FullDirection.North: pos = new BlockPosition(stair.X, stair.Z + StepCountPerFloor); break;
+                case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor - 1, stair.Z); break;
+                case FullDirection.North: pos = new BlockPosition(stair.X, stair.Z + StepCountPerFloor - 1); break;
                 case FullDirection.East: pos = new BlockPosition(stair.X, stair.Z); break;
                 case FullDirection.South: pos = new BlockPosition(stair.X, stair.Z); break;
                 default:
@@ -1669,8 +1791,8 @@ namespace MinecraftMapper {
             for (int step = 0; step < StepCountPerFloor; step++) {
                 for (int width = 0; width < StairsWidth; width++) {
                     switch (stair.Dir) {
-                        case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor - step, stair.Z + width); break;
-                        case FullDirection.North: pos = new BlockPosition(stair.X + width, stair.Z + StepCountPerFloor - step); break;
+                        case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor - 1 - step, stair.Z + width); break;
+                        case FullDirection.North: pos = new BlockPosition(stair.X + width, stair.Z + StepCountPerFloor - 1- step); break;
                         case FullDirection.East: pos = new BlockPosition(stair.X + step, stair.Z + width); break;
                         case FullDirection.South: pos = new BlockPosition(stair.X + width, stair.Z + step); break;
                         default:
@@ -1708,7 +1830,7 @@ namespace MinecraftMapper {
                     x = random.Next(left + 2, right - 2);
 
                     ok = true;
-                    for (int step = 0; step < StepCountPerFloor && ok; step++) {
+                    for (int step = -3; step < StepCountPerFloor + 3 && ok; step++) {
                         for (int width = 0; width < StairsWidth; width++) {
                             BlockPosition pos;
                             if (dir == FullDirection.East || dir == FullDirection.West) {
@@ -1725,7 +1847,7 @@ namespace MinecraftMapper {
                     }
                 }
                 if (ok) {
-                    for (int step = 0; step < 4 && ok; step++) {
+                    for (int step = -3; step < StepCountPerFloor + 3 && ok; step++) {
                         for (int width = 0; width < 3; width++) {
                             BlockPosition pos;
                             if (dir == FullDirection.East || dir == FullDirection.West) {
@@ -1861,6 +1983,14 @@ namespace MinecraftMapper {
 
                 _bm.SetID(point.X, height, point.Z, blockType);
                 _bm.SetData(point.X, height, point.Z, blockData);
+            }
+            return maxHeight;
+        }
+
+        private int FillArea(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Action<BlockPosition> drawPoint) {
+            int maxHeight, minHeight, avgHeight;
+            foreach (var point in GetFloorPoints(top, left, bottom, right, baseHeights, out maxHeight, out minHeight, out avgHeight)) {
+                drawPoint(point);
             }
             return maxHeight;
         }
@@ -2042,10 +2172,6 @@ namespace MinecraftMapper {
             return (position.Z >> 5) * 100 + position.X >> 5;
         }
 
-        class RoadQueue {
-            private readonly Dictionary<OsmReader.Way, LinkedList<OsmReader.Way>> Items;
-        }
-
         private Dictionary<BlockPosition, RoadPoint> DrawRoads() {
             int cur = 0;
             // We group the roads by their name here, and then order them by a position in the road.  The grouping
@@ -2080,9 +2206,6 @@ namespace MinecraftMapper {
                             way.Layer != null) {
                             continue;
                         }
-                    }
-                    if (way.Id == 396055523) {
-                        Console.WriteLine("hey");
                     }
 
                     WriteLine("{0} ({1}/{2})", way.Name, cur, _reader.Ways.Count);
@@ -2288,15 +2411,52 @@ namespace MinecraftMapper {
 
                             if (_leftEdgeId != null && point.Column < SidewalkWidth) {
                                 if (!isIntersection) {
-                                    _bm.SetID(point.Block.X, height, point.Block.Z, _leftEdgeId.Value);
+                                    int id = _leftEdgeId.Value;
+                                    if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z - 1) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height - 2) {
+                                        _bm.SetID(point.Block.X, height - 1, point.Block.Z, BlockType.DOUBLE_STONE_SLAB);
+                                        _bm.SetData(point.Block.X, height - 1, point.Block.Z, 0);
+                                    }/* else if (_bm.GetHeight(point.Block.X - 1, point.Block.Z) == height + 2 ||
+                                        _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height + 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z - 1) == height + 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height + 2) {
+                                        id = BlockType.DOUBLE_STONE_SLAB;
+                                    }*/
+
+                                    _bm.SetID(point.Block.X, height, point.Block.Z, id);
                                     _bm.SetData(point.Block.X, height, point.Block.Z, 0);
+                                    if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
+                                        _bm.SetID(point.Block.X, height - 1, point.Block.Z, BlockType.DOUBLE_STONE_SLAB);
+                                        _bm.SetData(point.Block.X, height - 1, point.Block.Z, 0);
+                                    }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
                                     ClearPlantLife(_bm, point.Block, height + 1);
                                 }
                             } else if (_rightEdgeId != null && point.Column >= targetWidth - SidewalkWidth) {
                                 if (!isIntersection) {
-                                    _bm.SetID(point.Block.X, height, point.Block.Z, _rightEdgeId.Value);
+                                    int id = _rightEdgeId.Value;
+                                    if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z - 1) == height - 2 ||
+                                        _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height - 2) {
+                                        _bm.SetID(point.Block.X, height - 1, point.Block.Z, BlockType.DOUBLE_STONE_SLAB);
+                                        _bm.SetData(point.Block.X, height - 1, point.Block.Z, 0);
+                                    }/* else if (_bm.GetHeight(point.Block.X - 1, point.Block.Z) == height + 2 ||
+                                         _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height + 2 ||
+                                         _bm.GetHeight(point.Block.X, point.Block.Z - 1) == height + 2 ||
+                                         _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height + 2) {
+                                        id = BlockType.DOUBLE_STONE_SLAB;
+                                    }*/
+                                    _bm.SetID(point.Block.X, height, point.Block.Z, id);
                                     _bm.SetData(point.Block.X, height, point.Block.Z, 0);
+                                    if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
+                                        _bm.SetID(point.Block.X, height - 1, point.Block.Z, BlockType.DOUBLE_STONE_SLAB);
+                                        _bm.SetData(point.Block.X, height - 1, point.Block.Z, 0);
+                                    }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
                                     ClearPlantLife(_bm, point.Block, height + 1);
                                 }
@@ -2559,7 +2719,7 @@ namespace MinecraftMapper {
                     var region = boundsFinder.FindBounds(pos);
 
                     // see if we have a special type of sign...
-                    OsmReader.SignType signType;
+                    OsmReader.SignInfo signType;
                     _reader.Signs.TryGetValue(intersection.Key, out signType);
                     if (!boundsFinder.HasSegments) {
                         continue;
@@ -2580,7 +2740,7 @@ namespace MinecraftMapper {
                     // because it's pretty all or nothing - we'll end up with conflicting locations, because
                     // we put the overhead lights across the street and extendng out, and we put the pole
                     // lights next to the road, so they'd both want to go at location X
-                    bool drawLights = ShouldDrawOverheadLights(intersection, signType, segments);
+                    bool drawLights = ShouldDrawOverheadLights(intersection, signType?.Type ?? OsmReader.SignType.None, segments);
                     for (int i = 0; i < segments.Length; i++) {
                         var segment = segments[i];
                         if (segment.Way.Name == null) {
@@ -2629,7 +2789,7 @@ namespace MinecraftMapper {
                             // We want signs facing on intersecting roads, parallel to the intersecting roads...
                             DrawTrafficLight(roadPoints, names, segment.Way, pos, angle.Value, direction);
                         } else {
-                            DrawRoadSign(signType, names, roadPoints, pos, angle.Value, segment.Way);
+                            DrawRoadSign(signType?.Type ?? OsmReader.SignType.None, names, roadPoints, pos, angle.Value, segment.Way);
                         }
                     }
                 }

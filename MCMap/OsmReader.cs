@@ -15,16 +15,13 @@ namespace MinecraftMapper {
         public readonly List<ParkingInfo> ParkingLots = new List<ParkingInfo>();
         public readonly Dictionary<string, Building> BuildingsByAddress = new Dictionary<string, Building>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, List<Node>> BusStops = new Dictionary<string, List<Node>>();
-        public readonly Dictionary<Node, SignType> Signs = new Dictionary<Node, SignType>();
+        public readonly Dictionary<Node, SignInfo> Signs = new Dictionary<Node, SignInfo>();
         public readonly Dictionary<Node, List<Way>> RoadsByNode = new Dictionary<Node, List<Way>>();
         public readonly List<AmenityNode> Amenities = new List<AmenityNode>();
+        public readonly List<LandInfo> LandUses = new List<LandInfo>();
+        public readonly List<LeisureInfo> Leisures = new List<LeisureInfo>();
         private readonly string _sourceXml;
-
-        public class SignInfo {
-            public readonly SignType Sign;
-            public readonly List<Way> Ways = new List<Way>();
-        }
-
+  
         public OsmReader(string sourceXml) {
             _sourceXml = sourceXml;
         }
@@ -386,7 +383,7 @@ namespace MinecraftMapper {
                                 tags.oneWay
                             );
                         } else if (tags.roadType == RoadType.BusStop) {
-                            if (tags.name != null && (tags.shelter ?? false)) {
+                            if (tags.name != null && (tags.shelter ?? false || (tags.covered ?? false))) {
                                 var streetNames = tags.name.Split('&');
                                 if (streetNames.Length != 2) {
                                     Console.WriteLine("BS: {0}", tags.name);
@@ -399,7 +396,7 @@ namespace MinecraftMapper {
                                 busNodes.Add(newNode);
                             }
                         } else if (tags.signType != SignType.None) {
-                            Signs[newNode] = tags.signType;
+                            Signs[newNode] = new SignInfo(tags.signType, tags.direction);
                         } 
                         break;
                     case "way":
@@ -502,9 +499,49 @@ namespace MinecraftMapper {
                         } else if (tags.amenity == Amenity.Parking) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             ParkingLots.Add(new ParkingInfo(wayId, nodes.ToArray(), tags.parking, tags.surface));
+                        } else if (tags.landUse != LandUse.None) {
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            LandUses.Add(new LandInfo(wayId, tags.landUse, nodes.ToArray()));
+                        } else if (tags.leisuire != Leisure.None) {
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            Leisures.Add(new LeisureInfo(wayId, tags.leisuire, nodes.ToArray()));
                         }
                         break;
                 }
+            }
+        }
+
+        internal class LandInfo {
+            public readonly long WayId;
+            public readonly LandUse LandUse;
+            public readonly Node[] Nodes;
+
+            public LandInfo(long wayId, OsmReader.LandUse landUse, Node[] nodes) {
+                WayId = wayId;
+                LandUse = landUse;
+                Nodes = nodes;
+            }
+        }
+
+        internal class LeisureInfo {
+            public readonly long WayId;
+            public readonly Leisure Leisure;
+            public readonly Node[] Nodes;
+
+            public LeisureInfo(long wayId, Leisure leisure, Node[] nodes) {
+                WayId = wayId;
+                Leisure = leisure;
+                Nodes = nodes;
+            }
+        }
+
+        public class SignInfo {
+            public readonly SignType Type;
+            public readonly int? Direction;
+
+            public SignInfo(SignType type, int? direction) {
+                Type = type;
+                Direction = direction;
             }
         }
 
@@ -649,6 +686,7 @@ namespace MinecraftMapper {
             public string source;
             public int? stories;
             public bool? shelter;
+            public bool? covered;
             public CrossingType crossing;
             public BarrierKind barrier;
             public Surface surface;
@@ -665,6 +703,9 @@ namespace MinecraftMapper {
             public Color? buildingColor;
             public Shop shop;
             public int? level;
+            public int? direction;
+            public LandUse landUse;
+            public Leisure leisuire;
         }
 
         public enum Parking {
@@ -704,10 +745,37 @@ namespace MinecraftMapper {
             RetainingWall
         }
 
+        public enum LandUse {
+            None,
+            Allotments
+        }
+
+        public enum Leisure {
+            None,
+            Park
+        }
+
         private static void ReadTag(ref TagInfo tagInfo, XElement node) {
             var key = node.Attribute("k").Value;
             var value = node.Attribute("v").Value;
             switch (key) {
+                case "leisure":
+                    if (value == "park") {
+                        tagInfo.leisuire = Leisure.Park;
+                        break;
+                    }
+                    break;
+                case "landuse":
+                    if (value == "allotments") {
+                        tagInfo.landUse = LandUse.Allotments;
+                    }
+                    break;
+                case "direction":
+                    int dir;
+                    if (Int32.TryParse(value, out dir)) {
+                        tagInfo.direction = dir;
+                    }
+                    break;
                 case "wall":
                     switch(value) {
                         case "dry_stone": tagInfo.wall = Wall.DryStone;break;
@@ -869,6 +937,15 @@ namespace MinecraftMapper {
                     break;
                 case "lanes":
                     tagInfo.lanes = Convert.ToInt32(value);
+                    break;
+                case "covered":
+                    switch (value) {
+                        case "yes": tagInfo.covered = true; break;
+                        case "no": tagInfo.covered = false; break;
+                        default:
+                            Console.WriteLine("Unknown covered: " + value);
+                            break;
+                    }
                     break;
                 case "shelter":
                     switch (value) {
