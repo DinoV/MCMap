@@ -11,17 +11,19 @@ namespace MinecraftMapper {
     /// </summary>
     class PositionConverter {
         private readonly PositionBase[] _positions;
-        private readonly int _worldWidth, _worldHeight;
+        private readonly int _maxX, _maxZ, _minX, _minZ;
 
-        public PositionConverter(int worldWidth, int worldHeight, params PositionBase[] positions) {
-            _worldWidth = worldWidth;
-            _worldHeight = worldHeight;
+        public PositionConverter(int minX, int minZ, int worldWidth, int worldHeight, params PositionBase[] positions) {
+            _minX = minX;
+            _minZ = minZ;
+            _maxX = worldWidth;
+            _maxZ = worldHeight;
             _positions = positions;
         }
 
         public bool IsValidPoint(BlockPosition point)   {
             //return point.X >= 0 && point.Z >= 0 && point.X < 10688 && point.Z < 22500;
-            return point.X >= 0 && point.Z >= 0 && point.X < _worldWidth && point.Z < _worldHeight;
+            return point.X >= _minX && point.Z >= _minZ && point.X < _maxX && point.Z < _maxZ;
         }
 
         public BlockPosition ToBlock(double latitude, double longitude) {

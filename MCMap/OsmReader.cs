@@ -396,7 +396,7 @@ namespace MinecraftMapper {
                                 busNodes.Add(newNode);
                             }
                         } else if (tags.signType != SignType.None) {
-                            Signs[newNode] = new SignInfo(tags.signType, tags.direction);
+                            Signs[newNode] = new SignInfo(tags.signType, tags.direction, id);
                         } 
                         break;
                     case "way":
@@ -538,10 +538,12 @@ namespace MinecraftMapper {
         public class SignInfo {
             public readonly SignType Type;
             public readonly int? Direction;
+            public readonly long Id;
 
-            public SignInfo(SignType type, int? direction) {
+            public SignInfo(SignType type, int? direction, long id) {
                 Type = type;
                 Direction = direction;
+                Id = id;
             }
         }
 

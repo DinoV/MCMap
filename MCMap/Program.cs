@@ -27,7 +27,7 @@ namespace MinecraftMapper {
             }
             var region = Path.Combine(world, "region");
 
-            int maxX = 0, maxZ = 0;
+            int maxX = 0, maxZ = 0, minX = Int32.MaxValue, minZ = Int32.MaxValue;
             foreach (var file in Directory.GetFiles(region)) {
                 var filenameInfo = Path.GetFileName(file).Split('.');
                 int x = 0, z = 0;
@@ -38,13 +38,17 @@ namespace MinecraftMapper {
                     filenameInfo[3] == "mca") {
                     maxX = Math.Max(x, maxX);
                     maxZ = Math.Max(z, maxZ);
+                    minX = Math.Min(x, minX);
+                    minZ = Math.Min(z, minZ);
                 }
             }
 
+            int worldX = ((minX) << _bm.ChunkXLog) << RegionChunkManager.REGION_XLOG;
+            int worldZ = ((minZ) << _bm.ChunkZLog) << RegionChunkManager.REGION_ZLOG;
             int worldWidth = ((maxX + 1) << _bm.ChunkXLog) << RegionChunkManager.REGION_XLOG;
             int worldHeight = ((maxZ + 1) << _bm.ChunkZLog) << RegionChunkManager.REGION_ZLOG;
 
-            _conv = new PositionConverter(worldWidth, worldHeight, conversions);
+            _conv = new PositionConverter(worldX, worldZ, worldWidth, worldHeight, conversions);
             _reader = new OsmReader(osmXml);
             /*
             HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
@@ -227,6 +231,9 @@ namespace MinecraftMapper {
 
                     bool first = true;
                     foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                        if (!_conv.IsValidPoint(point.Block)) {
+                            continue;
+                        }
                         if (first || prev == null || (++count % 10) != 0) {
                             if (prev != null) {
 
@@ -388,16 +395,11 @@ namespace MinecraftMapper {
         }
 
         static int Main(string[] args) {
-            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
-            // string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\New World";
-            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Seattle";
             string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Hackathon";
-            var world = NbtWorld.Open(map);
-            //var block = world.GetBlockManager().GetBlock(0, 130, 0);
-            Console.WriteLine(world);
             //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
+            var world = NbtWorld.Open(map);
+            Console.WriteLine(world);
             
-            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCreativeLidar4_2";
             string log = null;
             //string osmData = @"C:\Users\dino_\Downloads\SeattleTargetted.osm";
             string osmData = @"C:\Users\dino_\Downloads\SeattleCDMini.osm";
@@ -443,19 +445,7 @@ namespace MinecraftMapper {
                     positionBases.Add(new PositionBase(lat, lng, mcX, mcZ));
                 }
             }
-            //                    47.6152895, -122.3062076
-            //                    47.6164976, -122.3029356
-            //  Columbia & 26th 47.6164554, -122.2987516
-            //  20th and East Olive 47.6090430, -122.3063048
-            /*var seattleCDMini = new[] {
-                new PositionBase(47.6090430, -122.2987516, 10, 1450),  //26th and East Columbia
-                new PositionBase(47.6171548, -122.3061587, 946, 97)   
-            };*/
-            var seattleCD = new[] {
-                new PositionBase(47.6227923, -122.2825852, 8488, 2016),
-                new PositionBase(47.6061313, -122.3408919, 1244, 4878),
-                new PositionBase(47.5994269, -122.2865417, 7868, 6478),
-            };  // SeattleCentralDistrictCreative
+
             var seattle = new[] {
                 new PositionBase(47.68489, -122.33745, 1877, 1412),
                 new PositionBase(47.6073105, -122.3420636, 1092, 15572),
@@ -468,22 +458,6 @@ namespace MinecraftMapper {
             if (positionBases.Count == 0) {
                 positionBases.AddRange(seattle);
             }
-            /*
-            roads = new List<long>() {
-                481291015, 343521145, 481291013,
-                361784412, 337739269, 
-                396055523,  // 23rd ave north of union
-                460419028, // 23rd ave south of union
-                243349945,
-                40416132, // east union street
-                256994206, // east union
-                396055524, // east union
-                525497324, // 18th Ave
-                620762218, // East madison between 16th and 19th ave
-            };
-            buildings = new List<long>() {
-                228850098, 136571516, 456138164
-            };*/
             var mapper = new Mapper(log, map, osmData, positionBases.ToArray(), buildings.ToArray(), roads.ToArray());
             mapper.MapIt();
             return 0;
@@ -526,7 +500,7 @@ namespace MinecraftMapper {
         }
 
         private void DrawStreetLamp(Direction direction, BlockPosition center) {
-            var height = _bm.GetHeight(center.X, center.Z);
+            var height = GetHeight(center.X, center.Z);
             const int LampHeight = 8, Length = 3;
             for (int i = 0; i < LampHeight; i++) {
                 _bm.SetID(center.X, height + i, center.Z, BlockType.COBBLESTONE_WALL);
@@ -563,6 +537,10 @@ namespace MinecraftMapper {
                 for (int z = 0; z < 3; z++) {
                     var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
                     for (int x = -2; x <= 2; x++) {
+                        if (!_conv.IsValidPoint(new BlockPosition(center.X + x, zLoc))) {
+                            return;
+                        }
+
                         maxHeight = Math.Max(maxHeight, GetHeight(center.X + x, zLoc));
                     }
                 }
@@ -615,6 +593,9 @@ namespace MinecraftMapper {
                 for (int x = 0; x < 3; x++) {
                     var xLoc = direction == Direction.West ? center.X - x : center.X + x;
                     for (int z = -2; z <= 2; z++) {
+                        if (!_conv.IsValidPoint(new BlockPosition(xLoc, center.Z + z))) {
+                            return;
+                        }
                         maxHeight = Math.Max(maxHeight, GetHeight(xLoc, center.Z + z));
                     }
                 }
@@ -710,9 +691,12 @@ namespace MinecraftMapper {
             var nodes = building.BuildingNodes;
             int top, left, bottom, right;
             int groundMaxHeight = CalculateBounds(nodes, out top, out left, out bottom, out right, buildingPoints);
+            if (groundMaxHeight == Int32.MinValue) {
+                // no valid points for this building...
+                return;
+            }
 
             var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
-
             var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
 
             int floorHeight;
@@ -1131,6 +1115,9 @@ namespace MinecraftMapper {
         }
 
         private void DrawSign(BlockPosition signLoc, Direction direction, int signType = BlockType.SIGN_POST, int ? height = null, params string[] text) {
+            if (!_conv.IsValidPoint(signLoc)) {
+                return;
+            }
             List<string> names = new List<string>();
             foreach (var str in text) {
                 AddSignName(names, str);
@@ -1141,6 +1128,7 @@ namespace MinecraftMapper {
             if (height == null) {
                 height = GetHeight(signLoc) + 1;
             }
+            
             _bm.SetBlock(signLoc.X, height.Value, signLoc.Z, block);
             _bm.SetData(signLoc.X, height.Value, signLoc.Z, (int)direction);
         }
@@ -1151,6 +1139,9 @@ namespace MinecraftMapper {
 
         private int GetHeight(BlockPosition signLoc) {
             var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
+            if (groundHeight == 0) {
+                return 0;
+            }
             var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
             while (b.ID == BlockType.AIR) {
                 // GetHeight doesn't always work so well :P
@@ -1216,7 +1207,7 @@ namespace MinecraftMapper {
                 }
 
                 // And walk that point back into the closest building point
-                while (!buildingPoints.ContainsKey(targetPoint) && 
+                while (!baseHeights.ContainsKey(targetPoint) && 
                     targetPoint.X >= left - 1 && 
                     targetPoint.X <= right + 1 && 
                     targetPoint.Z >= top - 1 && 
@@ -1250,7 +1241,7 @@ namespace MinecraftMapper {
                 signPoints[targetPoint] = signNode;
 
                 // And finally bump it out to the outside of the building
-                if (buildingPoints.ContainsKey(buildingPoint)) {
+                if (baseHeights.ContainsKey(buildingPoint)) {
                     DoorDirection doorDir = 0;
                     switch (dir) {
                         case Direction.East: doorDir = DoorDirection.West; break;
@@ -1258,9 +1249,13 @@ namespace MinecraftMapper {
                         case Direction.West: doorDir = DoorDirection.East; break;
                         case Direction.North: doorDir = DoorDirection.South; break;
                     }
-                    DrawDoor(doorDir, targetPoint.X - adjX, targetPoint.Z - adjZ, baseHeights[buildingPoint]);
+                    int baseHeight;
+                    if (!baseHeights.TryGetValue(buildingPoint, out baseHeight)) {
+                        continue;
+                    }
+                    DrawDoor(doorDir, targetPoint.X - adjX, targetPoint.Z - adjZ, baseHeight);
                     doors.Add(new BlockPosition(targetPoint.X - adjX, targetPoint.Z - adjZ));
-                    DrawSign(targetPoint, dir, BlockType.WALL_SIGN, baseHeights[buildingPoint] + 3, signNode.Description);
+                    DrawSign(targetPoint, dir, BlockType.WALL_SIGN, baseHeight + 3, signNode.Description);
                 } else {
                     DrawSign(targetPoint, dir, signNode.Description);
                 }
@@ -1488,7 +1483,7 @@ namespace MinecraftMapper {
                             break;
                         }
                     }
-                    for (int y = top; y >= bottom; y--) {
+                    for (int y = bottom; y >= top; y--) {
                         if (buildingPositions.ContainsKey(new BlockPosition(x, y))) {
                             bStart = y;
                             break;
@@ -1825,6 +1820,9 @@ namespace MinecraftMapper {
                 int z = 0, x = 0;
                 bool ok = false;
                 FullDirection dir = (FullDirection)(random.Next() % 4);
+                if (top + 2 >= bottom - 2 || left + 2 >= right - 2) {
+                    continue;
+                }
                 for (int attempt = 0; attempt < 10 && !ok; attempt++) {
                     z = random.Next(top + 2, bottom - 2);
                     x = random.Next(left + 2, right - 2);
@@ -2021,11 +2019,14 @@ namespace MinecraftMapper {
             points.Enqueue(startPoint.Value);
 
             HashSet<BlockPosition> floorPoints = new HashSet<BlockPosition>();
+            if (!_conv.IsValidPoint(startPoint.Value)) {
+                return floorPoints;
+            }
             floorPoints.Add(startPoint.Value);
             int allHeights = 0;
             while (points.Count != 0) {
                 var next = points.Dequeue();
-
+                
                 var height = GetHeight(next);
                 allHeights += height;
                 maxHeight = Math.Max(height, maxHeight);
@@ -2038,6 +2039,9 @@ namespace MinecraftMapper {
                         continue;
                     }
                     if (!baseHeights.ContainsKey(cand) && !floorPoints.Contains(cand)) {
+                        if (!_conv.IsValidPoint(cand)) {
+                            continue;
+                        }
                         floorPoints.Add(cand);
                         points.Enqueue(cand);
                     }
@@ -2194,10 +2198,12 @@ namespace MinecraftMapper {
                         SaveBlocks();
                     }
 
-                    if (way.RoadType != OsmReader.RoadType.Service) {
+                    if (way.RoadType != OsmReader.RoadType.Service &&
+                        way.RoadType != OsmReader.RoadType.FootWay &&
+                        way.RoadType != OsmReader.RoadType.Motorway &&
+                        way.RoadType != OsmReader.RoadType.MotorwayLink) {
                         if (way.Name == null ||
-                            (way.RoadType != OsmReader.RoadType.Motorway &&
-                            way.RoadType != OsmReader.RoadType.Residential &&
+                            (way.RoadType != OsmReader.RoadType.Residential &&
                             way.RoadType != OsmReader.RoadType.FootWay &&
                             way.RoadType != OsmReader.RoadType.Primary &&
                             way.RoadType != OsmReader.RoadType.Secondary &&
@@ -2324,9 +2330,9 @@ namespace MinecraftMapper {
             protected readonly PositionConverter _conv;
             protected readonly AnvilBlockManager _bm;
             public readonly OsmReader.Way Way;
+            private bool IsSidewalk;
 
-
-            public RoadRenderer(PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width, int id, int data, int? leftEdgeId = null, int? rightEdgeId = null) {
+            public RoadRenderer(PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width, int id, int data, bool isSidealk, int? leftEdgeId = null, int? rightEdgeId = null) {
                 _conv = conv;
                 _bm = bm;
                 Way = way;
@@ -2335,6 +2341,7 @@ namespace MinecraftMapper {
                 Data = data;
                 _leftEdgeId = leftEdgeId;
                 _rightEdgeId = rightEdgeId;
+                IsSidewalk = isSidealk;
             }
 
             private const int SidewalkWidth = 3;
@@ -2342,7 +2349,7 @@ namespace MinecraftMapper {
             private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position, RoadSegment segment, int height, bool isSidewalk = false) {
                 RoadPoint roadPoint;
                 if (!roadPoints.TryGetValue(position, out roadPoint)) {
-                    roadPoints[position] = roadPoint = new RoadPoint(height, isSidewalk);
+                    roadPoints[position] = roadPoint = new RoadPoint(height, IsSidewalk || isSidewalk);
                 } else {
                     roadPoint.IsSidewalk = isSidewalk;
                 }
@@ -2495,6 +2502,7 @@ namespace MinecraftMapper {
         private RoadRenderer GetRoadStyle(OsmReader.Way way) {
             int width = GetRoadWidth(way);
             int id = BlockType.STONE_BRICK, data = 0;
+            bool isSidewalk = way.RoadType == OsmReader.RoadType.FootWay;
             switch (way.Surface) {
                 case OsmReader.Surface.Cobblestone: id = BlockType.COBBLESTONE; break;
                 case OsmReader.Surface.Asphalt: id = BlockType.CONCRETE; data = 15; break; // black concrete
@@ -2541,6 +2549,7 @@ namespace MinecraftMapper {
                                 id = BlockType.SANDSTONE;
                             }
                             break;
+                        case OsmReader.RoadType.MotorwayLink:
                         case OsmReader.RoadType.Motorway:
                             width = (way.Lanes ?? 2) * 4;
                             id = BlockType.CONCRETE; data = 8;
@@ -2564,7 +2573,7 @@ namespace MinecraftMapper {
                     leftEdge = rightEdge = BlockType.STONE_SLAB;
                     break;
             }
-            return new RoadRenderer(_conv, _bm, way, width, id, data, leftEdge, rightEdge);
+            return new RoadRenderer(_conv, _bm, way, width, id, data, isSidewalk, leftEdge, rightEdge);
         }
 
         struct Rect : IEquatable<Rect> {
