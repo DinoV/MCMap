@@ -678,8 +678,11 @@ namespace MinecraftMapper {
             if (_buildings.Length != 0) {
                 buildingList = _reader.Buildings.Where(x => _buildings.Contains(x.Key));
             } else {
-                buildingList = _reader.Buildings.OrderBy(x => MapOrder(_conv, x.Value.BuildingNodes.First()));
+                buildingList = _reader.Buildings.OrderBy(x => MapOrder(_conv, x.Value.BuildingNodes.First())).Where(
+                    x => _conv.IsValidPoint(_conv.ToBlock(x.Value.BuildingNodes.First().Lat, x.Value.BuildingNodes.First().Long))
+                );
             }
+            var count = buildingList.Count();
             // new[] { reader.Buildings[224047836], reader.Buildings[224048580], reader.Buildings[222409095], reader.Buildings[222409094] }
             //var buildings = new long[]{ 224047836 /*363250260, 4856210822, 4856214545 /*224047836, 224048580, 222409095, 222409094*/ };
             //var buildingList = _reader.Buildings.Where(x => buildings.Contains(x.Key));
@@ -689,7 +692,7 @@ namespace MinecraftMapper {
                     SaveBlocks();
                 }
 
-                WriteLine("Building {4}: {0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, _reader.Buildings.Count, building.Id);
+                WriteLine("Building {4}: {0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, count, building.Id);
                 DrawBuilding(building, buildingPoints, roofPoints, (int)(idAndBuilding.Key % 16));
             }
 
