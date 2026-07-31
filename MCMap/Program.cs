@@ -416,9 +416,7 @@ namespace MinecraftMapper {
         static int Main(string[] args) {
             string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Hackathon";
             //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
-            var world = NbtWorld.Open(map);
-            Console.WriteLine(world);
-            
+
             string log = null;
             //string osmData = @"C:\Users\dino_\Downloads\SeattleTargetted.osm";
             string osmData = @"C:\Users\dino_\Downloads\SeattleCDMini.osm";
@@ -432,9 +430,9 @@ namespace MinecraftMapper {
                 } else if (arg.StartsWith("/log:")) {
                     log = arg.Substring("/log:".Length);
                 } else if (arg.StartsWith("/map:")) {
-                    map = map.Substring("/map:".Length);
+                    map = arg.Substring("/map:".Length);
                 } else if (arg.StartsWith("/osm:")) {
-                    osmData = osmData.Substring("/osm:".Length);
+                    osmData = arg.Substring("/osm:".Length);
                 } else if (arg.StartsWith("/building:")) {
                     long building;
                     if (!long.TryParse(arg.Substring("/building:".Length), out building)) {
@@ -449,8 +447,8 @@ namespace MinecraftMapper {
                         return 1;
                     }
                     roads.Add(road);
-                } else if (map.StartsWith("/pos:")) {
-                    var coords = map.Substring("/pos:".Length).Split(',');
+                } else if (arg.StartsWith("/pos:")) {
+                    var coords = arg.Substring("/pos:".Length).Split(',');
                     double lat, lng;
                     int mcX, mcZ;
                     if (coords.Length != 4 ||
@@ -464,6 +462,12 @@ namespace MinecraftMapper {
                     positionBases.Add(new PositionBase(lat, lng, mcX, mcZ));
                 }
             }
+            if (map == null) {
+                Console.WriteLine("map required");
+                return 1;
+            }
+            var world = NbtWorld.Open(map);
+            Console.WriteLine(world);
 
             var seattle = new[] {
                 new PositionBase(47.68489, -122.33745, 1877, 1412),
