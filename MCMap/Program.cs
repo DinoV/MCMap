@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using static MinecraftMapper.OsmReader;
 
 namespace MinecraftMapper {
     class Mapper {
@@ -145,7 +146,6 @@ namespace MinecraftMapper {
                 DrawRails();
 
                 DrawStreetLamps(roadPoints);
-                _world.Level.Spawn = new SpawnPoint(6084, _world.Level.Spawn.Y, 14566);
                 var buildingPoints = DrawBuildings();
 
                 Save();
@@ -686,11 +686,10 @@ namespace MinecraftMapper {
             foreach (var idAndBuilding in buildingList) {
                 var building = idAndBuilding.Value;
                 if ((++cur % 200) == 0) {
-                    Console.WriteLine("Saving blocks...");
                     SaveBlocks();
                 }
 
-                WriteLine("{0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, _reader.Buildings.Count);
+                WriteLine("Building {4}: {0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, _reader.Buildings.Count, building.Id);
                 DrawBuilding(building, buildingPoints, roofPoints, (int)(idAndBuilding.Key % 16));
             }
 
@@ -2463,7 +2462,7 @@ namespace MinecraftMapper {
                                 // rather than the current height.
                                 height = existingRoad.Height;
                             } else {
-                                height = _bm.GetHeight(point.Block.X, point.Block.Z) + 1;
+                                height = _bm.GetHeight(point.Block.X, point.Block.Z);
                             }
 
                             if (_leftEdgeId != null && point.Column < SidewalkWidth) {
@@ -2601,7 +2600,7 @@ namespace MinecraftMapper {
                             break;
                         case OsmReader.RoadType.MotorwayLink:
                         case OsmReader.RoadType.Motorway:
-                            width = (way.Lanes ?? 2) * 4;
+                            width = (way.Lanes ?? 2) * 7;
                             id = BlockType.CONCRETE; data = 8;
                             break;
                         default:
@@ -3150,8 +3149,8 @@ namespace MinecraftMapper {
             SetSignName(name, ent);
 
             if (_conv.IsValidPoint(target)) {
-                _bm.SetBlock(target.X, height + 1, target.Z, block);
-                _bm.SetData(target.X, height + 1, target.Z, (int)direction);
+                _bm.SetBlock(target.X, height, target.Z, block);
+                _bm.SetData(target.X, height, target.Z, (int)direction);
             }
         }
 
