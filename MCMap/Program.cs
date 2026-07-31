@@ -2003,7 +2003,7 @@ namespace MinecraftMapper {
                             blockType = BlockType.STONE_BRICK_STAIRS;
                             break;
                         case 6:
-                            blockType = BlockType.NETHER_BRICK;
+                            blockType = BlockType.NETHER_BRICK_STAIRS;
                             break;
                         case 7:
                             blockType = BlockType.QUARTZ_STAIRS;
