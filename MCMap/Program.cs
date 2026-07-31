@@ -25,30 +25,47 @@ namespace MinecraftMapper {
             if (log != null) {
                 _log = new StreamWriter(new FileStream(log, FileMode.Create, FileAccess.ReadWrite));
             }
-            var region = Path.Combine(world, "region");
+            var region = ((AnvilWorld)_world).GetRegionManager().GetRegionPath();
 
-            int maxX = 0, maxZ = 0, minX = Int32.MaxValue, minZ = Int32.MaxValue;
+            int maxChunkX = Int32.MinValue, maxChunkZ = Int32.MinValue;
+            int minChunkX = Int32.MaxValue, minChunkZ = Int32.MaxValue;
             foreach (var file in Directory.GetFiles(region)) {
                 var filenameInfo = Path.GetFileName(file).Split('.');
-                int x = 0, z = 0;
+                int regionX = 0, regionZ = 0;
                 if (filenameInfo.Length == 4 &&
                     filenameInfo[0] == "r" &&
-                    int.TryParse(filenameInfo[1], out x) &&
-                    int.TryParse(filenameInfo[2], out z) &&
+                    int.TryParse(filenameInfo[1], out regionX) &&
+                    int.TryParse(filenameInfo[2], out regionZ) &&
                     filenameInfo[3] == "mca") {
-                    maxX = Math.Max(x, maxX);
-                    maxZ = Math.Max(z, maxZ);
-                    minX = Math.Min(x, minX);
-                    minZ = Math.Min(z, minZ);
+                    using (var regionFile = new Substrate.Core.RegionFile(file)) {
+                        for (int localZ = 0; localZ < 32; localZ++) {
+                            for (int localX = 0; localX < 32; localX++) {
+                                if (!regionFile.HasChunk(localX, localZ)) {
+                                    continue;
+                                }
+
+                                int chunkX = (regionX << RegionChunkManager.REGION_XLOG) + localX;
+                                int chunkZ = (regionZ << RegionChunkManager.REGION_ZLOG) + localZ;
+                                maxChunkX = Math.Max(chunkX, maxChunkX);
+                                maxChunkZ = Math.Max(chunkZ, maxChunkZ);
+                                minChunkX = Math.Min(chunkX, minChunkX);
+                                minChunkZ = Math.Min(chunkZ, minChunkZ);
+                            }
+                        }
+                    }
                 }
             }
 
-            int worldX = ((minX) << _bm.ChunkXLog) << RegionChunkManager.REGION_XLOG;
-            int worldZ = ((minZ) << _bm.ChunkZLog) << RegionChunkManager.REGION_ZLOG;
-            int worldWidth = ((maxX + 1) << _bm.ChunkXLog) << RegionChunkManager.REGION_XLOG;
-            int worldHeight = ((maxZ + 1) << _bm.ChunkZLog) << RegionChunkManager.REGION_ZLOG;
+            if (minChunkX == Int32.MaxValue) {
+                throw new InvalidDataException("The world contains no populated chunks.");
+            }
 
-            _conv = new PositionConverter(worldX, worldZ, worldWidth, worldHeight, conversions);
+            int worldX = minChunkX << _bm.ChunkXLog;
+            int worldZ = minChunkZ << _bm.ChunkZLog;
+            int worldMaxX = (maxChunkX + 1) << _bm.ChunkXLog;
+            int worldMaxZ = (maxChunkZ + 1) << _bm.ChunkZLog;
+
+            _conv = new PositionConverter(worldX, worldZ, worldMaxX, worldMaxZ, conversions);
             _reader = new OsmReader(osmXml);
             /*
             HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();

@@ -13,11 +13,11 @@ namespace MinecraftMapper {
         private readonly PositionBase[] _positions;
         private readonly int _maxX, _maxZ, _minX, _minZ;
 
-        public PositionConverter(int minX, int minZ, int worldWidth, int worldHeight, params PositionBase[] positions) {
+        public PositionConverter(int minX, int minZ, int maxX, int maxZ, params PositionBase[] positions) {
             _minX = minX;
             _minZ = minZ;
-            _maxX = worldWidth;
-            _maxZ = worldHeight;
+            _maxX = maxX;
+            _maxZ = maxZ;
             _positions = positions;
         }
 
