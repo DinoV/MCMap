@@ -9,6 +9,7 @@ using System.Xml.Linq;
 namespace MinecraftMapper {
     class OsmReader {
         public readonly Dictionary<long, Way> Ways = new Dictionary<long, Way>();
+        public readonly Dictionary<long, Rail> Rails = new Dictionary<long, Rail>();
         public readonly Dictionary<string, List<Way>> RoadsByName = new Dictionary<string, List<Way>>();
         public readonly Dictionary<long, Building> Buildings = new Dictionary<long, Building>();
         public readonly HashSet<Barrier> Barriers = new HashSet<Barrier>();
@@ -238,6 +239,18 @@ namespace MinecraftMapper {
             Woodchips,
             Stone,
             RailroadTies,
+        }
+
+        public class Rail {
+            public readonly long Id;
+            public readonly string Name;
+            public readonly Node[] Nodes;
+
+            public Rail(long id, string name, Node[] nodes) {
+                Id = id;
+                Name = name;
+                Nodes = nodes;
+            }
         }
 
         public class Way {
@@ -494,6 +507,13 @@ namespace MinecraftMapper {
                                 }
                                 roads.Add(road);
                             }
+                        } else if (tags.railType != RailType.None) {
+                            var railId = Convert.ToInt64(data.Attribute("id").Value);
+                            var road = Rails[railId] = new Rail(
+                                railId,
+                                tags.name,
+                                nodes.ToArray()
+                            );
                         } else if (tags.barrier != BarrierKind.None) {
                             Barriers.Add(new Barrier(nodes.ToArray(), tags.barrier, tags.wall));
                         } else if (tags.amenity == Amenity.Parking) {
@@ -708,6 +728,7 @@ namespace MinecraftMapper {
             public int? direction;
             public LandUse landUse;
             public Leisure leisuire;
+            public RailType railType;
         }
 
         public enum Parking {
@@ -975,6 +996,17 @@ namespace MinecraftMapper {
                         case "marked": break;
                         default:
                             Console.WriteLine("Unknown crossing: " + value);
+                            break;
+                    }
+                    break;
+                case "railway":
+                    switch(value) {
+                        case "rail": tagInfo.railType = RailType.Rail; break;
+                        case "light_rail": tagInfo.railType = RailType.LightRail; break;
+                        case "narrow_gauge": tagInfo.railType = RailType.NarrowGauge; break;
+                        case "funicular": tagInfo.railType = RailType.Funicular; break;
+                        default:
+                            Console.WriteLine("Unknown rail: {0}", value);
                             break;
                     }
                     break;
@@ -1339,6 +1371,14 @@ namespace MinecraftMapper {
             }
 
             return amenity;
+        }
+
+        private enum RailType {
+            None,
+            Rail,
+            LightRail,
+            NarrowGauge,
+            Funicular
         }
     }
 

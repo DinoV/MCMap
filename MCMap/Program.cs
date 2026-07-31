@@ -125,6 +125,8 @@ namespace MinecraftMapper {
 
                 var roadPoints = DrawRoads();
 
+                DrawRails();
+
                 DrawStreetLamps(roadPoints);
                 _world.Level.Spawn = new SpawnPoint(6084, _world.Level.Spawn.Y, 14566);
                 var buildingPoints = DrawBuildings();
@@ -2174,6 +2176,33 @@ namespace MinecraftMapper {
         private static int MapOrder(PositionConverter conv, OsmReader.Node node) {
             var position = conv.ToBlock(node.Lat, node.Long);
             return (position.Z >> 5) * 100 + position.X >> 5;
+        }
+
+        private void DrawRails() {
+            IEnumerable<IGrouping<string, OsmReader.Rail>> rails = _reader.Rails.Values.GroupBy(x => x.Name ?? "")
+                .OrderBy(x => MapOrder(_conv, x.First().Nodes.First()));
+            int cur = 0;
+            foreach (var railGroup in rails) {
+                foreach (var rail in railGroup) {
+                    if ((++cur % 50) == 0) {
+                        SaveBlocks();
+                    }
+
+                    WriteLine("Rail: {0} ({1}/{2})", rail.Name, cur, _reader.Rails.Count);
+                    var start = rail.Nodes[0];
+                    for (int i = 1; i < rail.Nodes.Length; i++) {
+                        var from = _conv.ToBlock(start.Lat, start.Long);
+                        var to = _conv.ToBlock(rail.Nodes[i].Lat, rail.Nodes[i].Long);
+
+                        foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                            if (_conv.IsValidPoint(point.Block) && point.Block.X > 1 && point.Block.Z > 1) {
+                                _bm.SetID(point.Block.X, GetHeight(point.Block), point.Block.Z, BlockType.RAILS);
+                                _bm.SetData(point.Block.X, GetHeight(point.Block), point.Block.Z, 0);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private Dictionary<BlockPosition, RoadPoint> DrawRoads() {
