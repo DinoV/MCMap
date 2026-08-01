@@ -2422,22 +2422,29 @@ namespace MinecraftMapper {
         }
 
         class RoadRenderer {
-            public readonly int Id, Data, Width;
-            private readonly int? _leftEdgeId, _rightEdgeId;
+            public readonly string BlockName;
+            public readonly Substrate.Nbt.TagNodeCompound Properties;
+            public readonly int Width;
+            private readonly string _leftEdgeName, _rightEdgeName;
+            private readonly Substrate.Nbt.TagNodeCompound _edgeProperties;
             protected readonly PositionConverter _conv;
             protected readonly AnvilBlockManager _bm;
             public readonly OsmReader.Way Way;
             private bool IsSidewalk;
 
-            public RoadRenderer(PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width, int id, int data, bool isSidealk, int? leftEdgeId = null, int? rightEdgeId = null) {
+            public RoadRenderer(PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width,
+                    string blockName, Substrate.Nbt.TagNodeCompound properties, bool isSidealk,
+                    string leftEdgeName = null, string rightEdgeName = null,
+                    Substrate.Nbt.TagNodeCompound edgeProperties = null) {
                 _conv = conv;
                 _bm = bm;
                 Way = way;
                 Width = width;
-                Id = id;
-                Data = data;
-                _leftEdgeId = leftEdgeId;
-                _rightEdgeId = rightEdgeId;
+                BlockName = blockName;
+                Properties = properties;
+                _leftEdgeName = leftEdgeName;
+                _rightEdgeName = rightEdgeName;
+                _edgeProperties = edgeProperties;
                 IsSidewalk = isSidealk;
             }
 
@@ -2456,10 +2463,10 @@ namespace MinecraftMapper {
             public void Render(Dictionary<BlockPosition, RoadPoint> roadPoints) {
                 var start = Way.Nodes[0];
                 int initialWidth = Width;
-                if (_leftEdgeId != null) {
+                if (_leftEdgeName != null) {
                     initialWidth += SidewalkWidth;
                 }
-                if (_rightEdgeId != null) {
+                if (_rightEdgeName != null) {
                     initialWidth += SidewalkWidth;
                 }
                 for (int i = 1; i < Way.Nodes.Length; i++) {
@@ -2513,9 +2520,8 @@ namespace MinecraftMapper {
                                 height = _bm.GetHeight(point.Block.X, point.Block.Z);
                             }
 
-                            if (_leftEdgeId != null && point.Column < SidewalkWidth) {
+                            if (_leftEdgeName != null && point.Column < SidewalkWidth) {
                                 if (!isIntersection) {
-                                    int id = _leftEdgeId.Value;
                                     if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
@@ -2529,16 +2535,15 @@ namespace MinecraftMapper {
                                         id = BlockType.DOUBLE_STONE_SLAB;
                                     }*/
 
-                                    SetMappedBlock(_bm, point.Block.X, height, point.Block.Z, id, 0);
+                                    _bm.SetBlock(point.Block.X, height, point.Block.Z, _leftEdgeName, _edgeProperties);
                                     if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
                                         _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
                                     ClearPlantLife(_bm, point.Block, height + 1);
                                 }
-                            } else if (_rightEdgeId != null && point.Column >= targetWidth - SidewalkWidth) {
+                            } else if (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth) {
                                 if (!isIntersection) {
-                                    int id = _rightEdgeId.Value;
                                     if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
@@ -2551,7 +2556,7 @@ namespace MinecraftMapper {
                                          _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height + 2) {
                                         id = BlockType.DOUBLE_STONE_SLAB;
                                     }*/
-                                    SetMappedBlock(_bm, point.Block.X, height, point.Block.Z, id, 0);
+                                    _bm.SetBlock(point.Block.X, height, point.Block.Z, _rightEdgeName, _edgeProperties);
                                     if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
                                         _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
@@ -2574,7 +2579,7 @@ namespace MinecraftMapper {
             }
 
             public bool DrawRoadPoint(LinePosition point, int height) {
-                SetMappedBlock(_bm, point.Block.X, height - 1, point.Block.Z, Id, Data);
+                _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, BlockName, Properties);
                 return true;
             }
         }
@@ -2590,43 +2595,46 @@ namespace MinecraftMapper {
 
         private RoadRenderer GetRoadStyle(OsmReader.Way way) {
             int width = GetRoadWidth(way);
-            int id = BlockType.STONE_BRICK, data = 0;
+            string blockName = AcquaticBlocks.StoneBricks;
+            Substrate.Nbt.TagNodeCompound properties = null;
             bool isSidewalk = way.RoadType == OsmReader.RoadType.FootWay;
             switch (way.Surface) {
-                case OsmReader.Surface.Cobblestone: id = BlockType.COBBLESTONE; break;
-                case OsmReader.Surface.Asphalt: id = BlockType.CONCRETE; data = 15; break; // black concrete
-                case OsmReader.Surface.Clay: id = BlockType.CLAY_BLOCK; break;
-                case OsmReader.Surface.Dirt: id = BlockType.DIRT; break;
-                case OsmReader.Surface.Gravel: id = BlockType.GRAVEL; break;
-                case OsmReader.Surface.Metal: id = BlockType.IRON_BLOCK; break;
-                case OsmReader.Surface.Stone: id = BlockType.STONE; break;
-                case OsmReader.Surface.Brick: id = BlockType.BRICK_BLOCK; break;
-                case OsmReader.Surface.Sand: id = BlockType.SAND; break;
-                case OsmReader.Surface.Wood: id = BlockType.WOOD; break;
-                case OsmReader.Surface.GravelGrass: id = BlockType.MOSS_STONE; break;
-                case OsmReader.Surface.Compacted: id = BlockType.FARMLAND; break;
-                case OsmReader.Surface.FineGravel: id = BlockType.GRAVEL; break;
-                case OsmReader.Surface.Ground: id = BlockType.DIRT; break;
-                case OsmReader.Surface.RailroadTies: id = BlockType.WOOD; break;
-                case OsmReader.Surface.Concrete: id = BlockType.CONCRETE; data = 8; break; //light gray concrete
+                case OsmReader.Surface.Cobblestone: blockName = AcquaticBlocks.Cobblestone; break;
+                case OsmReader.Surface.Asphalt: blockName = AcquaticBlocks.BlackConcrete; break;
+                case OsmReader.Surface.Clay: blockName = AcquaticBlocks.Clay; break;
+                case OsmReader.Surface.Dirt: blockName = AcquaticBlocks.Dirt; break;
+                case OsmReader.Surface.Gravel: blockName = AcquaticBlocks.Gravel; break;
+                case OsmReader.Surface.Metal: blockName = AcquaticBlocks.IronBlock; break;
+                case OsmReader.Surface.Stone: blockName = AcquaticBlocks.Stone; break;
+                case OsmReader.Surface.Brick: blockName = AcquaticBlocks.Bricks; break;
+                case OsmReader.Surface.Sand: blockName = AcquaticBlocks.Sand; break;
+                case OsmReader.Surface.Wood: blockName = AcquaticBlocks.OakPlanks; break;
+                case OsmReader.Surface.GravelGrass: blockName = AcquaticBlocks.MossyCobblestone; break;
+                case OsmReader.Surface.Compacted:
+                    blockName = AcquaticBlocks.Farmland;
+                    properties = CreateBlockProperties(BlockProperties.Moisture, "0");
+                    break;
+                case OsmReader.Surface.FineGravel: blockName = AcquaticBlocks.Gravel; break;
+                case OsmReader.Surface.Ground: blockName = AcquaticBlocks.Dirt; break;
+                case OsmReader.Surface.RailroadTies: blockName = AcquaticBlocks.OakPlanks; break;
+                case OsmReader.Surface.Concrete: blockName = AcquaticBlocks.LightGrayConcrete; break;
                 default:
                 case OsmReader.Surface.None:
                     switch (way.RoadType) {
                         case OsmReader.RoadType.Path:
                             width = 2;
-                            id = BlockType.GRAVEL;
+                            blockName = AcquaticBlocks.Gravel;
                             break;
                         case OsmReader.RoadType.Residential:
                         case OsmReader.RoadType.Primary:
                         case OsmReader.RoadType.Secondary:
                         case OsmReader.RoadType.Trunk:
                             width = (way.Lanes ?? 3) * 4;
-                            id = BlockType.CONCRETE; data = 8;
+                            blockName = AcquaticBlocks.LightGrayConcrete;
                             break;
                         case OsmReader.RoadType.Service:
                             width = 3;
-                            id = BlockType.CONCRETE_POWDER;
-                            data = 0;
+                            blockName = AcquaticBlocks.WhiteConcretePowder;
                             break;
                         case OsmReader.RoadType.FootWay:
                             if (way.Crossing != OsmReader.CrossingType.None) {
@@ -2635,34 +2643,44 @@ namespace MinecraftMapper {
                                 }
                             } else {
                                 width = 2;
-                                id = BlockType.SANDSTONE;
+                                blockName = AcquaticBlocks.Sandstone;
                             }
                             break;
                         case OsmReader.RoadType.MotorwayLink:
                         case OsmReader.RoadType.Motorway:
                             width = (way.Lanes ?? 2) * 7;
-                            id = BlockType.CONCRETE; data = 8;
+                            blockName = AcquaticBlocks.LightGrayConcrete;
                             break;
                         default:
-                            id = BlockType.CONCRETE; data = 8;
+                            blockName = AcquaticBlocks.LightGrayConcrete;
                             break;
                     }
                     break;
             }
 
-            int? leftEdge = null, rightEdge = null;
+            string leftEdge = null, rightEdge = null;
             switch (way.Sidewalk) {
                 case OsmReader.Sidewalk.Left:
-                    leftEdge = BlockType.STONE_SLAB;
+                    leftEdge = AcquaticBlocks.StoneSlab;
                     break;
                 case OsmReader.Sidewalk.Right:
-                    rightEdge = BlockType.STONE_SLAB;
+                    rightEdge = AcquaticBlocks.StoneSlab;
                     break;
                 case OsmReader.Sidewalk.Both:
-                    leftEdge = rightEdge = BlockType.STONE_SLAB;
+                    leftEdge = rightEdge = AcquaticBlocks.StoneSlab;
                     break;
             }
-            return new RoadRenderer(_conv, _bm, way, width, id, data, isSidewalk, leftEdge, rightEdge);
+            Substrate.Nbt.TagNodeCompound edgeProperties = leftEdge == null && rightEdge == null
+                ? null
+                : CreateBlockProperties(BlockProperties.Type, "bottom");
+            return new RoadRenderer(_conv, _bm, way, width, blockName, properties, isSidewalk,
+                leftEdge, rightEdge, edgeProperties);
+        }
+
+        private static Substrate.Nbt.TagNodeCompound CreateBlockProperties(string name, string value) {
+            var properties = new Substrate.Nbt.TagNodeCompound();
+            properties[name] = new Substrate.Nbt.TagNodeString(value);
+            return properties;
         }
 
         struct Rect : IEquatable<Rect> {
