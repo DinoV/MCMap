@@ -145,11 +145,13 @@ namespace MinecraftMapper {
             try {
                 WriteLine("{0} roads", _reader.Ways.Count);
 
-                DrawLandUses();
+                if (_roads.Length == 0) {
+                    DrawLandUses();
 
-                DrawLeisures();
+                    DrawLeisures();
 
-                DrawParkingLots();
+                    DrawParkingLots();
+                }
 
                 var roadPoints = DrawRoads();
 
@@ -2618,7 +2620,7 @@ namespace MinecraftMapper {
                         case OsmReader.RoadType.Primary:
                         case OsmReader.RoadType.Secondary:
                         case OsmReader.RoadType.Trunk:
-                            width = (way.Lanes ?? 2) * 3;
+                            width = (way.Lanes ?? 3) * 4;
                             id = BlockType.CONCRETE; data = 8;
                             break;
                         case OsmReader.RoadType.Service:
