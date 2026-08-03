@@ -2451,11 +2451,13 @@ namespace MinecraftMapper {
             private const int SidewalkWidth = 3;
 
             private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position, RoadSegment segment, int height, bool isSidewalk = false) {
+                bool pointIsSidewalk = IsSidewalk || isSidewalk;
                 RoadPoint roadPoint;
                 if (!roadPoints.TryGetValue(position, out roadPoint)) {
-                    roadPoints[position] = roadPoint = new RoadPoint(height, IsSidewalk || isSidewalk);
+                    roadPoints[position] = roadPoint = new RoadPoint(height, pointIsSidewalk);
                 } else {
-                    roadPoint.IsSidewalk = isSidewalk;
+                    // Once a point contains a road, a sidewalk must never take ownership of it.
+                    roadPoint.IsSidewalk = roadPoint.IsSidewalk && pointIsSidewalk;
                 }
                 roadPoint.Segments.Add(segment);
             }
@@ -2489,6 +2491,9 @@ namespace MinecraftMapper {
 
                     foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z, targetWidth)) {
                         if (_conv.IsValidPoint(point.Block) && point.Block.X > 1 && point.Block.Z > 1) {
+                            bool isSidewalkPoint = IsSidewalk ||
+                                (_leftEdgeName != null && point.Column < SidewalkWidth) ||
+                                (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth);
                             RoadPoint existingRoad;
                             bool isIntersection = roadPoints.TryGetValue(point.Block, out existingRoad);
                             if (isIntersection) {
@@ -2497,6 +2502,12 @@ namespace MinecraftMapper {
                                     if (segment.Way == Way ||
                                         (segment.Way.Name != null && segment.Way.Name == Way.Name)) {
                                         AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height);
+                                        skip = true;
+                                        break;
+                                    } else if (!existingRoad.IsSidewalk && isSidewalkPoint) {
+                                        // Roads have priority, regardless of whether the sidewalk was
+                                        // rendered as a footway or as the edge of another road.
+                                        AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height, true);
                                         skip = true;
                                         break;
                                     } else if (!existingRoad.IsSidewalk && GetRoadWidth(segment.Way) > Width) {
@@ -2513,8 +2524,8 @@ namespace MinecraftMapper {
 
                             int height;
                             if (isIntersection) {
-                                // use the existing tracked height, in case we added a raised sidewalk,
-                                // rather than the current height.
+                                // Roads and sidewalks share a base height.  A road slab replaces a
+                                // sidewalk block at that height when the two overlap.
                                 height = existingRoad.Height;
                             } else {
                                 height = _bm.GetHeight(point.Block.X, point.Block.Z);
@@ -2535,12 +2546,12 @@ namespace MinecraftMapper {
                                         id = BlockType.DOUBLE_STONE_SLAB;
                                     }*/
 
-                                    _bm.SetBlock(point.Block.X, height, point.Block.Z, _leftEdgeName, _edgeProperties);
-                                    if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
-                                        _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                    _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, _leftEdgeName, _edgeProperties);
+                                    if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
+                                        _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
-                                    ClearPlantLife(_bm, point.Block, height + 1);
+                                    ClearPlantLife(_bm, point.Block, height);
                                 }
                             } else if (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth) {
                                 if (!isIntersection) {
@@ -2556,12 +2567,12 @@ namespace MinecraftMapper {
                                          _bm.GetHeight(point.Block.X, point.Block.Z + 1) == height + 2) {
                                         id = BlockType.DOUBLE_STONE_SLAB;
                                     }*/
-                                    _bm.SetBlock(point.Block.X, height, point.Block.Z, _rightEdgeName, _edgeProperties);
-                                    if (_bm.GetID(point.Block.X, height - 1, point.Block.Z) == BlockType.AIR) {
-                                        _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                    _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, _rightEdgeName, _edgeProperties);
+                                    if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
+                                        _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
-                                    ClearPlantLife(_bm, point.Block, height + 1);
+                                    ClearPlantLife(_bm, point.Block, height);
                                 }
                             } else {
                                 if (DrawRoadPoint(point, height)) {
@@ -2593,88 +2604,119 @@ namespace MinecraftMapper {
             }
         }
 
-        private RoadRenderer GetRoadStyle(OsmReader.Way way) {
-            int width = GetRoadWidth(way);
-            string blockName = AcquaticBlocks.StoneBricks;
-            Substrate.Nbt.TagNodeCompound properties = null;
-            bool isSidewalk = way.RoadType == OsmReader.RoadType.FootWay;
+        private static string GetRoadBlock(OsmReader.Way way) {
+            string blockName = AcquaticBlocks.SandstoneSlab;
+            switch (way.Surface) {
+                case OsmReader.Surface.Cobblestone: blockName = AcquaticBlocks.CobblestoneSlab; break;
+                case OsmReader.Surface.Asphalt: blockName = AcquaticBlocks.DeepslateTileSlab; break;
+                case OsmReader.Surface.Clay: blockName = AcquaticBlocks.PolishedTuffSlab; break;
+                case OsmReader.Surface.Dirt: blockName = AcquaticBlocks.MudBrickSlab; break;
+                case OsmReader.Surface.Gravel: blockName = AcquaticBlocks.TuffSlab; break;
+                case OsmReader.Surface.Metal: blockName = AcquaticBlocks.PolishedAndesiteSlab; break;
+                case OsmReader.Surface.Stone: blockName = AcquaticBlocks.StoneSlab; break;
+                case OsmReader.Surface.Brick: blockName = AcquaticBlocks.BrickSlab; break;
+                case OsmReader.Surface.Sand: blockName = AcquaticBlocks.SandstoneSlab; break;
+                case OsmReader.Surface.Wood: blockName = AcquaticBlocks.OakSlab; break;
+                case OsmReader.Surface.GravelGrass: blockName = AcquaticBlocks.MossyCobblestoneSlab; break;
+                case OsmReader.Surface.Compacted: blockName = AcquaticBlocks.WarpedSlab; break;
+                case OsmReader.Surface.FineGravel: blockName = AcquaticBlocks.TuffSlab; break;
+                case OsmReader.Surface.Ground: blockName = AcquaticBlocks.SpruceSlab; break;
+                case OsmReader.Surface.RailroadTies: blockName = AcquaticBlocks.OakSlab; break;
+                case OsmReader.Surface.Concrete: blockName = AcquaticBlocks.SmoothStoneSlab; break;
+            }
+            return blockName;
+        }
+
+        private static string GetSidewalkBlock(OsmReader.Way way) {
+            string blockName = AcquaticBlocks.Sandstone;
             switch (way.Surface) {
                 case OsmReader.Surface.Cobblestone: blockName = AcquaticBlocks.Cobblestone; break;
-                case OsmReader.Surface.Asphalt: blockName = AcquaticBlocks.BlackConcrete; break;
-                case OsmReader.Surface.Clay: blockName = AcquaticBlocks.Clay; break;
-                case OsmReader.Surface.Dirt: blockName = AcquaticBlocks.Dirt; break;
-                case OsmReader.Surface.Gravel: blockName = AcquaticBlocks.Gravel; break;
-                case OsmReader.Surface.Metal: blockName = AcquaticBlocks.IronBlock; break;
+                case OsmReader.Surface.Asphalt: blockName = AcquaticBlocks.DeepslateTiles; break;
+                case OsmReader.Surface.Clay: blockName = AcquaticBlocks.PolishedTuff; break;
+                case OsmReader.Surface.Dirt: blockName = AcquaticBlocks.MudBricks; break;
+                case OsmReader.Surface.Gravel: blockName = AcquaticBlocks.Tuff; break;
+                case OsmReader.Surface.Metal: blockName = AcquaticBlocks.PolishedAndesite; break;
                 case OsmReader.Surface.Stone: blockName = AcquaticBlocks.Stone; break;
                 case OsmReader.Surface.Brick: blockName = AcquaticBlocks.Bricks; break;
-                case OsmReader.Surface.Sand: blockName = AcquaticBlocks.Sand; break;
+                case OsmReader.Surface.Sand: blockName = AcquaticBlocks.Sandstone; break;
                 case OsmReader.Surface.Wood: blockName = AcquaticBlocks.OakPlanks; break;
                 case OsmReader.Surface.GravelGrass: blockName = AcquaticBlocks.MossyCobblestone; break;
-                case OsmReader.Surface.Compacted:
-                    blockName = AcquaticBlocks.Farmland;
-                    properties = CreateBlockProperties(BlockProperties.Moisture, "0");
-                    break;
-                case OsmReader.Surface.FineGravel: blockName = AcquaticBlocks.Gravel; break;
-                case OsmReader.Surface.Ground: blockName = AcquaticBlocks.Dirt; break;
+                case OsmReader.Surface.Compacted: blockName = AcquaticBlocks.WarpedPlanks; break;
+                case OsmReader.Surface.FineGravel: blockName = AcquaticBlocks.Tuff; break;
+                case OsmReader.Surface.Ground: blockName = AcquaticBlocks.SprucePlanks; break;
                 case OsmReader.Surface.RailroadTies: blockName = AcquaticBlocks.OakPlanks; break;
-                case OsmReader.Surface.Concrete: blockName = AcquaticBlocks.LightGrayConcrete; break;
-                default:
-                case OsmReader.Surface.None:
+                case OsmReader.Surface.Concrete: blockName = AcquaticBlocks.SmoothStone; break;
+            }
+            return blockName;
+        }
+
+        private RoadRenderer GetRoadStyle(OsmReader.Way way) {
+            int width = GetRoadWidth(way);
+            string blockName;
+            Substrate.Nbt.TagNodeCompound properties = null;
+            bool isSidewalk = way.RoadType == OsmReader.RoadType.FootWay;
+            if (isSidewalk) {
+                if (way.Crossing != OsmReader.CrossingType.None) {
+                    if (way.Crossing == OsmReader.CrossingType.Zebra) {
+                        return null;
+                    }
+                    Console.WriteLine("Crossing {0}", way.Crossing);
+                }
+
+                width = 3;
+                blockName = GetSidewalkBlock(way);
+            } else if (way.RoadType == OsmReader.RoadType.Service) {
+                // Service roads stay level with the surrounding terrain.  Use the
+                // full-block equivalent of an explicit surface, or smooth stone
+                // for the default surface used by service roads.
+                blockName = way.Surface == OsmReader.Surface.None
+                    ? AcquaticBlocks.SmoothStone
+                    : GetSidewalkBlock(way);
+                if (way.Surface == OsmReader.Surface.None) {
+                    width = 4;
+                }
+            } else {
+                blockName = GetRoadBlock(way);
+                properties = CreateBlockProperties(BlockProperties.Type, "bottom");
+                if (way.Surface == OsmReader.Surface.None) {
                     switch (way.RoadType) {
                         case OsmReader.RoadType.Path:
-                            width = 2;
-                            blockName = AcquaticBlocks.Gravel;
+                            width = 3;
+                            blockName = AcquaticBlocks.TuffSlab;
                             break;
                         case OsmReader.RoadType.Residential:
                         case OsmReader.RoadType.Primary:
                         case OsmReader.RoadType.Secondary:
                         case OsmReader.RoadType.Trunk:
                             width = (way.Lanes ?? 3) * 4;
-                            blockName = AcquaticBlocks.LightGrayConcrete;
-                            break;
-                        case OsmReader.RoadType.Service:
-                            width = 3;
-                            blockName = AcquaticBlocks.WhiteConcretePowder;
-                            break;
-                        case OsmReader.RoadType.FootWay:
-                            if (way.Crossing != OsmReader.CrossingType.None) {
-                                if (way.Crossing == OsmReader.CrossingType.Zebra) {
-                                    return null;
-                                }
-                            } else {
-                                width = 2;
-                                blockName = AcquaticBlocks.Sandstone;
-                            }
+                            blockName = AcquaticBlocks.SmoothStoneSlab;
                             break;
                         case OsmReader.RoadType.MotorwayLink:
                         case OsmReader.RoadType.Motorway:
                             width = (way.Lanes ?? 2) * 7;
-                            blockName = AcquaticBlocks.LightGrayConcrete;
+                            blockName = AcquaticBlocks.SmoothStoneSlab;
                             break;
                         default:
-                            blockName = AcquaticBlocks.LightGrayConcrete;
+                            blockName = AcquaticBlocks.SmoothStoneSlab;
                             break;
                     }
-                    break;
+                }
             }
 
             string leftEdge = null, rightEdge = null;
             switch (way.Sidewalk) {
                 case OsmReader.Sidewalk.Left:
-                    leftEdge = AcquaticBlocks.StoneSlab;
+                    leftEdge = AcquaticBlocks.StoneBricks;
                     break;
                 case OsmReader.Sidewalk.Right:
-                    rightEdge = AcquaticBlocks.StoneSlab;
+                    rightEdge = AcquaticBlocks.StoneBricks;
                     break;
                 case OsmReader.Sidewalk.Both:
-                    leftEdge = rightEdge = AcquaticBlocks.StoneSlab;
+                    leftEdge = rightEdge = AcquaticBlocks.StoneBricks;
                     break;
             }
-            Substrate.Nbt.TagNodeCompound edgeProperties = leftEdge == null && rightEdge == null
-                ? null
-                : CreateBlockProperties(BlockProperties.Type, "bottom");
             return new RoadRenderer(_conv, _bm, way, width, blockName, properties, isSidewalk,
-                leftEdge, rightEdge, edgeProperties);
+                leftEdge, rightEdge);
         }
 
         private static Substrate.Nbt.TagNodeCompound CreateBlockProperties(string name, string value) {
