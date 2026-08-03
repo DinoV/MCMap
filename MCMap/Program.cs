@@ -2413,11 +2413,16 @@ namespace MinecraftMapper {
             public readonly List<RoadSegment> Segments;
             public int Height;
             public bool IsSidewalk;
+            public string BlockName;
+            public Substrate.Nbt.TagNodeCompound Properties;
 
-            public RoadPoint(int height, bool isSidewalk) {
+            public RoadPoint(int height, bool isSidewalk, string blockName,
+                    Substrate.Nbt.TagNodeCompound properties) {
                 Segments = new List<RoadSegment>();
                 Height = height;
                 IsSidewalk = isSidewalk;
+                BlockName = blockName;
+                Properties = properties;
             }
         }
 
@@ -2450,14 +2455,26 @@ namespace MinecraftMapper {
 
             private const int SidewalkWidth = 3;
 
-            private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position, RoadSegment segment, int height, bool isSidewalk = false) {
+            private void AddRoadPoint(Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition position,
+                    RoadSegment segment, int height, bool isSidewalk = false,
+                    string blockName = null, Substrate.Nbt.TagNodeCompound properties = null) {
                 bool pointIsSidewalk = IsSidewalk || isSidewalk;
+                if (blockName == null) {
+                    blockName = BlockName;
+                    properties = Properties;
+                }
                 RoadPoint roadPoint;
                 if (!roadPoints.TryGetValue(position, out roadPoint)) {
-                    roadPoints[position] = roadPoint = new RoadPoint(height, pointIsSidewalk);
+                    roadPoints[position] = roadPoint = new RoadPoint(
+                        height, pointIsSidewalk, blockName, properties);
                 } else {
                     // Once a point contains a road, a sidewalk must never take ownership of it.
+                    if (roadPoint.IsSidewalk && !pointIsSidewalk) {
+                        roadPoint.BlockName = blockName;
+                        roadPoint.Properties = properties;
+                    }
                     roadPoint.IsSidewalk = roadPoint.IsSidewalk && pointIsSidewalk;
+                    roadPoints[position] = roadPoint;
                 }
                 roadPoint.Segments.Add(segment);
             }
@@ -2501,7 +2518,8 @@ namespace MinecraftMapper {
                                 foreach (var segment in existingRoad.Segments) {
                                     if (segment.Way == Way ||
                                         (segment.Way.Name != null && segment.Way.Name == Way.Name)) {
-                                        AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height);
+                                        AddRoadPoint(roadPoints, point.Block, curSegment, existingRoad.Height,
+                                            isSidewalkPoint);
                                         skip = true;
                                         break;
                                     } else if (!existingRoad.IsSidewalk && isSidewalkPoint) {
@@ -2518,6 +2536,15 @@ namespace MinecraftMapper {
                                 }
 
                                 if (skip) {
+                                    RoadPoint winningPoint = roadPoints[point.Block];
+                                    // Repaint the block state that owns the point. This fills lowered-road
+                                    // intersection gaps without allowing a sidewalk or narrower road to
+                                    // replace the winning roadway.
+                                    if (!winningPoint.IsSidewalk) {
+                                        _bm.SetBlock(point.Block.X, winningPoint.Height - 1,
+                                            point.Block.Z, winningPoint.BlockName, winningPoint.Properties);
+                                        ClearPlantLife(_bm, point.Block, winningPoint.Height);
+                                    }
                                     continue;
                                 }
                             }
@@ -2550,7 +2577,8 @@ namespace MinecraftMapper {
                                     if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
                                         _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
-                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true,
+                                        _leftEdgeName, _edgeProperties);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
                             } else if (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth) {
@@ -2571,7 +2599,8 @@ namespace MinecraftMapper {
                                     if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
                                         _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
                                     }
-                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true);
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height, true,
+                                        _rightEdgeName, _edgeProperties);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
                             } else {
