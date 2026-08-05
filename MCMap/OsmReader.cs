@@ -263,9 +263,10 @@ namespace MinecraftMapper {
             public readonly CrossingType Crossing;
             public readonly Surface Surface;
             public readonly bool OneWay;
+            public readonly bool Bridge;
             public readonly long Id;
 
-            public Way(long id, string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay) {
+            public Way(long id, string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay, bool bridge) {
                 Id = id;
                 Name = name;
                 Nodes = nodes;
@@ -273,6 +274,7 @@ namespace MinecraftMapper {
                 RoadType = roadType;
                 Sidewalk = sidewalk;
                 OneWay = oneWay;
+                Bridge = bridge;
                 Layer = layer;
                 Crossing = crossing;
                 Surface = surface;
@@ -393,7 +395,8 @@ namespace MinecraftMapper {
                                 tags.layer,
                                 tags.crossing,
                                 tags.surface,
-                                tags.oneWay
+                                tags.oneWay,
+                                tags.bridge
                             );
                         } else if (tags.roadType == RoadType.BusStop) {
                             if (tags.name != null && (tags.shelter ?? false || (tags.covered ?? false))) {
@@ -491,7 +494,8 @@ namespace MinecraftMapper {
                                 tags.layer,
                                 tags.crossing,
                                 tags.surface,
-                                tags.oneWay
+                                tags.oneWay,
+                                tags.bridge
                             );
                             foreach (var point in nodes) {
                                 List<Way> ways;
@@ -714,6 +718,7 @@ namespace MinecraftMapper {
             public Surface surface;
             public SignType signType;
             public bool oneWay;
+            public bool bridge;
             public RoofType roofType;
             public double? roofHeight;
             internal Color? roofColor;
@@ -782,6 +787,9 @@ namespace MinecraftMapper {
             var key = node.Attribute("k").Value;
             var value = node.Attribute("v").Value;
             switch (key) {
+                case "bridge":
+                    tagInfo.bridge = value != "no";
+                    break;
                 case "leisure":
                     if (value == "park") {
                         tagInfo.leisuire = Leisure.Park;

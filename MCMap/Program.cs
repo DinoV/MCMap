@@ -2307,7 +2307,7 @@ namespace MinecraftMapper {
                             way.RoadType != OsmReader.RoadType.Secondary &&
                             way.RoadType != OsmReader.RoadType.Path &&
                             way.RoadType != OsmReader.RoadType.Trunk) ||
-                            way.Layer != null) {
+                            (way.Layer != null && !way.Bridge)) {
                             continue;
                         }
                     }
@@ -2468,6 +2468,9 @@ namespace MinecraftMapper {
                     roadPoints[position] = roadPoint = new RoadPoint(
                         height, pointIsSidewalk, blockName, properties);
                 } else {
+                    if (Way.Bridge) {
+                        roadPoint.Height = height;
+                    }
                     // Once a point contains a road, a sidewalk must never take ownership of it.
                     if (roadPoint.IsSidewalk && !pointIsSidewalk) {
                         roadPoint.BlockName = blockName;
@@ -2480,7 +2483,21 @@ namespace MinecraftMapper {
             }
 
             public void Render(Dictionary<BlockPosition, RoadPoint> roadPoints) {
-                var start = Way.Nodes[0];
+                var path = Way.Nodes.Select(node =>
+                    _conv.ToBlock(node.Lat, node.Long)).ToList();
+                int bridgeStartHeight = 0, bridgeEndHeight = 0;
+                double bridgeLength = 0, completedBridgeLength = 0;
+                if (Way.Bridge) {
+                    BlockPosition bridgeStart = FindBridgeAnchor(
+                        path[0], path[1], out bridgeStartHeight);
+                    BlockPosition bridgeEnd = FindBridgeAnchor(
+                        path[path.Count - 1], path[path.Count - 2],
+                        out bridgeEndHeight);
+                    path.Insert(0, bridgeStart);
+                    path.Add(bridgeEnd);
+                    for (int pathIndex = 1; pathIndex < path.Count; pathIndex++)
+                        bridgeLength += Distance(path[pathIndex - 1], path[pathIndex]);
+                }
                 int initialWidth = Width;
                 if (_leftEdgeName != null) {
                     initialWidth += SidewalkWidth;
@@ -2488,10 +2505,15 @@ namespace MinecraftMapper {
                 if (_rightEdgeName != null) {
                     initialWidth += SidewalkWidth;
                 }
-                for (int i = 1; i < Way.Nodes.Length; i++) {
-                    var from = _conv.ToBlock(start.Lat, start.Long);
-                    var to = _conv.ToBlock(Way.Nodes[i].Lat, Way.Nodes[i].Long);
-                    var curSegment = new RoadSegment(Way, start, Way.Nodes[i]);
+                for (int i = 1; i < path.Count; i++) {
+                    var from = path[i - 1];
+                    var to = path[i];
+                    int wayEndIndex = Way.Bridge
+                        ? Math.Max(1, Math.Min(Way.Nodes.Length - 1, i - 1))
+                        : i;
+                    var curSegment = new RoadSegment(
+                        Way, Way.Nodes[wayEndIndex - 1], Way.Nodes[wayEndIndex]);
+                    double segmentLength = Distance(from, to);
 
                     var xDelta = Math.Abs(from.X - to.X);
                     var yDelta = Math.Abs(from.Z - to.Z);
@@ -2513,7 +2535,7 @@ namespace MinecraftMapper {
                                 (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth);
                             RoadPoint existingRoad;
                             bool isIntersection = roadPoints.TryGetValue(point.Block, out existingRoad);
-                            if (isIntersection) {
+                            if (isIntersection && !Way.Bridge) {
                                 bool skip = false;
                                 foreach (var segment in existingRoad.Segments) {
                                     if (segment.Way == Way ||
@@ -2550,7 +2572,25 @@ namespace MinecraftMapper {
                             }
 
                             int height;
-                            if (isIntersection) {
+                            if (Way.Bridge) {
+                                double x = point.Block.X - from.X;
+                                double z = point.Block.Z - from.Z;
+                                double segmentProgress = 0;
+                                if (segmentLength != 0) {
+                                    segmentProgress =
+                                        (x * (to.X - from.X) + z * (to.Z - from.Z)) /
+                                        (segmentLength * segmentLength);
+                                    segmentProgress = Math.Max(0, Math.Min(1, segmentProgress));
+                                }
+                                double bridgeProgress = bridgeLength == 0
+                                    ? 0
+                                    : (completedBridgeLength + segmentProgress * segmentLength) /
+                                        bridgeLength;
+                                height = (int)Math.Round(
+                                    bridgeStartHeight +
+                                    (bridgeEndHeight - bridgeStartHeight) * bridgeProgress,
+                                    MidpointRounding.AwayFromZero);
+                            } else if (isIntersection) {
                                 // Roads and sidewalks share a base height.  A road slab replaces a
                                 // sidewalk block at that height when the two overlap.
                                 height = existingRoad.Height;
@@ -2559,7 +2599,7 @@ namespace MinecraftMapper {
                             }
 
                             if (_leftEdgeName != null && point.Column < SidewalkWidth) {
-                                if (!isIntersection) {
+                                if (!isIntersection || Way.Bridge) {
                                     if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
@@ -2575,14 +2615,19 @@ namespace MinecraftMapper {
 
                                     _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, _leftEdgeName, _edgeProperties);
                                     if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
-                                        _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                        if (Way.Bridge) {
+                                            _bm.SetBlock(point.Block.X, height - 2, point.Block.Z,
+                                                GetFullBlockName(_leftEdgeName));
+                                        } else {
+                                            _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                        }
                                     }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true,
                                         _leftEdgeName, _edgeProperties);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
                             } else if (_rightEdgeName != null && point.Column >= targetWidth - SidewalkWidth) {
-                                if (!isIntersection) {
+                                if (!isIntersection || Way.Bridge) {
                                     if (_bm.GetHeight(point.Block.X, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X - 1, point.Block.Z) == height - 2 ||
                                         _bm.GetHeight(point.Block.X + 1, point.Block.Z) == height - 2 ||
@@ -2597,12 +2642,30 @@ namespace MinecraftMapper {
                                     }*/
                                     _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, _rightEdgeName, _edgeProperties);
                                     if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
-                                        _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                        if (Way.Bridge) {
+                                            _bm.SetBlock(point.Block.X, height - 2, point.Block.Z,
+                                                GetFullBlockName(_rightEdgeName));
+                                        } else {
+                                            _bm.SetBlock(point.Block.X, height - 2, point.Block.Z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Double, waterlogged: false);
+                                        }
                                     }
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height, true,
                                         _rightEdgeName, _edgeProperties);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
+                            } else if (Way.Bridge &&
+                                    (point.Column == 0 || point.Column == targetWidth - 1)) {
+                                string bridgeEdgeName = GetFullBlockName(BlockName);
+                                _bm.SetBlock(point.Block.X, height - 1, point.Block.Z,
+                                    bridgeEdgeName);
+                                if (_bm.GetID(point.Block.X, height - 2, point.Block.Z) ==
+                                        BlockType.AIR) {
+                                    _bm.SetBlock(point.Block.X, height - 2, point.Block.Z,
+                                        bridgeEdgeName);
+                                }
+                                AddRoadPoint(roadPoints, point.Block, curSegment, height,
+                                    false, bridgeEdgeName);
+                                ClearPlantLife(_bm, point.Block, height);
                             } else {
                                 if (DrawRoadPoint(point, height)) {
                                     AddRoadPoint(roadPoints, point.Block, curSegment, height);
@@ -2613,14 +2676,58 @@ namespace MinecraftMapper {
                         }
                     }
 
-                    start = Way.Nodes[i];
+                    completedBridgeLength += segmentLength;
                     //WriteLine("From {0},{1} to {2},{3}", from.X, from.Z, to.X, to.Z);
                 }
+
             }
 
             public bool DrawRoadPoint(LinePosition point, int height) {
                 _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, BlockName, Properties);
+                if (Way.Bridge &&
+                        _bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
+                    _bm.SetBlock(point.Block.X, height - 2, point.Block.Z,
+                        GetFullBlockName(BlockName));
+                }
                 return true;
+            }
+
+            private static double Distance(BlockPosition first, BlockPosition second) {
+                double x = second.X - first.X;
+                double z = second.Z - first.Z;
+                return Math.Sqrt(x * x + z * z);
+            }
+
+            private BlockPosition FindBridgeAnchor(
+                    BlockPosition endpoint, BlockPosition interior, out int height) {
+                const int ApproachSearchLength = 10;
+                double xDirection = endpoint.X - interior.X;
+                double zDirection = endpoint.Z - interior.Z;
+                double directionLength = Math.Sqrt(
+                    xDirection * xDirection + zDirection * zDirection);
+                if (directionLength == 0) {
+                    height = _bm.GetHeight(endpoint.X, endpoint.Z);
+                    return endpoint;
+                }
+
+                xDirection /= directionLength;
+                zDirection /= directionLength;
+                BlockPosition anchor = endpoint;
+                height = _bm.GetHeight(endpoint.X, endpoint.Z);
+                for (int distance = 1; distance <= ApproachSearchLength; distance++) {
+                    var candidate = new BlockPosition(
+                        (int)Math.Round(endpoint.X + xDirection * distance,
+                            MidpointRounding.AwayFromZero),
+                        (int)Math.Round(endpoint.Z + zDirection * distance,
+                            MidpointRounding.AwayFromZero));
+                    if (!_conv.IsValidPoint(candidate)) break;
+                    int candidateHeight = _bm.GetHeight(candidate.X, candidate.Z);
+                    if (candidateHeight >= height) {
+                        height = candidateHeight;
+                        anchor = candidate;
+                    }
+                }
+                return anchor;
             }
         }
 
@@ -2631,6 +2738,24 @@ namespace MinecraftMapper {
                     bm.SetBlock(position.X, height + i, position.Z, AcquaticBlocks.Air);
                 }
             }
+        }
+
+        private static string GetFullBlockName(string blockName) {
+            if (blockName == AcquaticBlocks.CobblestoneSlab) return AcquaticBlocks.Cobblestone;
+            if (blockName == AcquaticBlocks.DeepslateTileSlab) return AcquaticBlocks.DeepslateTiles;
+            if (blockName == AcquaticBlocks.PolishedTuffSlab) return AcquaticBlocks.PolishedTuff;
+            if (blockName == AcquaticBlocks.MudBrickSlab) return AcquaticBlocks.MudBricks;
+            if (blockName == AcquaticBlocks.TuffSlab) return AcquaticBlocks.Tuff;
+            if (blockName == AcquaticBlocks.PolishedAndesiteSlab) return AcquaticBlocks.PolishedAndesite;
+            if (blockName == AcquaticBlocks.StoneSlab) return AcquaticBlocks.Stone;
+            if (blockName == AcquaticBlocks.BrickSlab) return AcquaticBlocks.Bricks;
+            if (blockName == AcquaticBlocks.SandstoneSlab) return AcquaticBlocks.Sandstone;
+            if (blockName == AcquaticBlocks.OakSlab) return AcquaticBlocks.OakPlanks;
+            if (blockName == AcquaticBlocks.MossyCobblestoneSlab) return AcquaticBlocks.MossyCobblestone;
+            if (blockName == AcquaticBlocks.WarpedSlab) return AcquaticBlocks.WarpedPlanks;
+            if (blockName == AcquaticBlocks.SpruceSlab) return AcquaticBlocks.SprucePlanks;
+            if (blockName == AcquaticBlocks.SmoothStoneSlab) return AcquaticBlocks.SmoothStone;
+            return blockName;
         }
 
         private static string GetRoadBlock(OsmReader.Way way) {
