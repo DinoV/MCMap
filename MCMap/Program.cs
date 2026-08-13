@@ -2317,7 +2317,7 @@ namespace MinecraftMapper {
                         way.RoadType != OsmReader.RoadType.FootWay &&
                         way.RoadType != OsmReader.RoadType.Motorway &&
                         way.RoadType != OsmReader.RoadType.MotorwayLink) {
-                        if (way.Name == null ||
+                        if ((way.Name == null && !way.Roundabout) ||
                             (way.RoadType != OsmReader.RoadType.Residential &&
                             way.RoadType != OsmReader.RoadType.FootWay &&
                             way.RoadType != OsmReader.RoadType.Primary &&
@@ -2531,6 +2531,7 @@ namespace MinecraftMapper {
                     var curSegment = new RoadSegment(
                         Way, Way.Nodes[wayEndIndex - 1], Way.Nodes[wayEndIndex]);
                     double segmentLength = Distance(from, to);
+                    var previousRoadPoints = new Dictionary<int, RoadStepPoint>();
 
                     var xDelta = Math.Abs(from.X - to.X);
                     var yDelta = Math.Abs(from.Z - to.Z);
@@ -2561,6 +2562,14 @@ namespace MinecraftMapper {
                                             isSidewalkPoint);
                                         skip = true;
                                         break;
+                                    } else if (existingRoad.IsSidewalk && !IsSidewalk) {
+                                        // Two road-edge sidewalks can overlap across the entire center of
+                                        // an intersection. Promote that shared area to this road's lane
+                                        // material instead of leaving the original terrain untouched.
+                                        AddRoadPoint(roadPoints, point.Block, curSegment,
+                                            existingRoad.Height, false, BlockName, Properties);
+                                        skip = true;
+                                        break;
                                     } else if (!existingRoad.IsSidewalk && isSidewalkPoint) {
                                         // Roads have priority, regardless of whether the sidewalk was
                                         // rendered as a footway or as the edge of another road.
@@ -2579,11 +2588,9 @@ namespace MinecraftMapper {
                                     // Repaint the block state that owns the point. This fills lowered-road
                                     // intersection gaps without allowing a sidewalk or narrower road to
                                     // replace the winning roadway.
-                                    if (!winningPoint.IsSidewalk) {
-                                        _bm.SetBlock(point.Block.X, winningPoint.Height - 1,
-                                            point.Block.Z, winningPoint.BlockName, winningPoint.Properties);
-                                        ClearPlantLife(_bm, point.Block, winningPoint.Height);
-                                    }
+                                    _bm.SetBlock(point.Block.X, winningPoint.Height - 1,
+                                        point.Block.Z, winningPoint.BlockName, winningPoint.Properties);
+                                    ClearPlantLife(_bm, point.Block, winningPoint.Height);
                                     continue;
                                 }
                             }
@@ -2684,8 +2691,13 @@ namespace MinecraftMapper {
                                     false, bridgeEdgeName);
                                 ClearPlantLife(_bm, point.Block, height);
                             } else {
-                                if (DrawRoadPoint(point, height)) {
-                                    AddRoadPoint(roadPoints, point.Block, curSegment, height);
+                                string roadBlockName = BlockName;
+                                Substrate.Nbt.TagNodeCompound roadProperties = Properties;
+                                MakeRoadStepGradual(roadPoints, previousRoadPoints, point,
+                                    height, ref roadBlockName, ref roadProperties);
+                                if (DrawRoadPoint(point, height, roadBlockName, roadProperties)) {
+                                    AddRoadPoint(roadPoints, point.Block, curSegment, height,
+                                        false, roadBlockName, roadProperties);
                                     ClearPlantLife(_bm, point.Block, height);
                                 }
                             }
@@ -2697,14 +2709,131 @@ namespace MinecraftMapper {
                     //WriteLine("From {0},{1} to {2},{3}", from.X, from.Z, to.X, to.Z);
                 }
 
+                if (Way.Roundabout) {
+                    FillSmallRoundabout(path, roadPoints);
+                }
             }
 
-            public bool DrawRoadPoint(LinePosition point, int height) {
-                _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, BlockName, Properties);
+            private void FillSmallRoundabout(List<BlockPosition> path,
+                    Dictionary<BlockPosition, RoadPoint> roadPoints) {
+                const int MaxPavedRoundaboutDiameter = 32;
+                int minX = path.Min(point => point.X);
+                int maxX = path.Max(point => point.X);
+                int minZ = path.Min(point => point.Z);
+                int maxZ = path.Max(point => point.Z);
+                if (maxX - minX > MaxPavedRoundaboutDiameter ||
+                        maxZ - minZ > MaxPavedRoundaboutDiameter) {
+                    return;
+                }
+
+                var segment = new RoadSegment(Way, Way.Nodes[0], Way.Nodes[1]);
+                for (int z = minZ; z <= maxZ; z++) {
+                    for (int x = minX; x <= maxX; x++) {
+                        var position = new BlockPosition(x, z);
+                        if (!_conv.IsValidPoint(position) ||
+                                !IsInsidePolygon(x + 0.5, z + 0.5, path)) {
+                            continue;
+                        }
+
+                        RoadPoint existingRoad;
+                        bool hasExistingRoad = roadPoints.TryGetValue(position, out existingRoad);
+                        int height = hasExistingRoad
+                            ? existingRoad.Height
+                            : _bm.GetHeight(x, z);
+                        string blockName = hasExistingRoad && !existingRoad.IsSidewalk
+                            ? existingRoad.BlockName
+                            : BlockName;
+                        Substrate.Nbt.TagNodeCompound properties =
+                            hasExistingRoad && !existingRoad.IsSidewalk
+                                ? existingRoad.Properties
+                                : Properties;
+                        _bm.SetBlock(x, height - 1, z, blockName, properties);
+                        AddRoadPoint(roadPoints, position, segment, height,
+                            false, blockName, properties);
+                        ClearPlantLife(_bm, position, height);
+                    }
+                }
+            }
+
+            private static bool IsInsidePolygon(double x, double z,
+                    IList<BlockPosition> polygon) {
+                bool inside = false;
+                for (int current = 0, previous = polygon.Count - 1;
+                        current < polygon.Count; previous = current++) {
+                    double currentZ = polygon[current].Z;
+                    double previousZ = polygon[previous].Z;
+                    if ((currentZ > z) == (previousZ > z)) continue;
+                    double edgeX = (polygon[previous].X - polygon[current].X) *
+                        (z - currentZ) / (previousZ - currentZ) + polygon[current].X;
+                    if (x < edgeX) inside = !inside;
+                }
+                return inside;
+            }
+
+            private struct RoadStepPoint {
+                public readonly BlockPosition Position;
+                public readonly int Height;
+
+                public RoadStepPoint(BlockPosition position, int height) {
+                    Position = position;
+                    Height = height;
+                }
+            }
+
+            private void MakeRoadStepGradual(
+                    Dictionary<BlockPosition, RoadPoint> roadPoints,
+                    Dictionary<int, RoadStepPoint> previousRoadPoints,
+                    LinePosition point, int height, ref string blockName,
+                    ref Substrate.Nbt.TagNodeCompound properties) {
+                RoadStepPoint previous;
+                if (!Way.Bridge &&
+                        previousRoadPoints.TryGetValue(point.Column, out previous) &&
+                        Math.Abs(previous.Height - height) == 1) {
+                    string fullBlockName = GetFullBlockName(BlockName);
+                    if (fullBlockName == BlockName) {
+                        // Full-block roads ease onto the higher terrain with a bottom slab.
+                        string slabBlockName = GetSlabBlockName(BlockName);
+                        var slabProperties = CreateBlockProperties(BlockProperties.Type, "bottom");
+                        if (height > previous.Height) {
+                            blockName = slabBlockName;
+                            properties = slabProperties;
+                        } else {
+                            _bm.SetBlock(previous.Position.X, previous.Height - 1,
+                                previous.Position.Z, slabBlockName, slabProperties);
+                            RoadPoint previousRoadPoint;
+                            if (roadPoints.TryGetValue(previous.Position, out previousRoadPoint)) {
+                                previousRoadPoint.BlockName = slabBlockName;
+                                previousRoadPoint.Properties = slabProperties;
+                                roadPoints[previous.Position] = previousRoadPoint;
+                            }
+                        }
+                    } else {
+                        // Slab roads use a top slab on the lower terrain, halfway between
+                        // the two normal bottom-slab surface levels.
+                        var topProperties = CreateBlockProperties(BlockProperties.Type, "top");
+                        if (height < previous.Height) {
+                            properties = topProperties;
+                        } else {
+                            _bm.SetBlock(previous.Position.X, previous.Height - 1,
+                                previous.Position.Z, BlockName, topProperties);
+                            RoadPoint previousRoadPoint;
+                            if (roadPoints.TryGetValue(previous.Position, out previousRoadPoint)) {
+                                previousRoadPoint.Properties = topProperties;
+                                roadPoints[previous.Position] = previousRoadPoint;
+                            }
+                        }
+                    }
+                }
+                previousRoadPoints[point.Column] = new RoadStepPoint(point.Block, height);
+            }
+
+            public bool DrawRoadPoint(LinePosition point, int height, string blockName,
+                    Substrate.Nbt.TagNodeCompound properties) {
+                _bm.SetBlock(point.Block.X, height - 1, point.Block.Z, blockName, properties);
                 if (Way.Bridge &&
                         _bm.GetID(point.Block.X, height - 2, point.Block.Z) == BlockType.AIR) {
                     _bm.SetBlock(point.Block.X, height - 2, point.Block.Z,
-                        GetFullBlockName(BlockName));
+                        GetFullBlockName(blockName));
                 }
                 return true;
             }
@@ -2772,6 +2901,24 @@ namespace MinecraftMapper {
             if (blockName == AcquaticBlocks.WarpedSlab) return AcquaticBlocks.WarpedPlanks;
             if (blockName == AcquaticBlocks.SpruceSlab) return AcquaticBlocks.SprucePlanks;
             if (blockName == AcquaticBlocks.SmoothStoneSlab) return AcquaticBlocks.SmoothStone;
+            return blockName;
+        }
+
+        private static string GetSlabBlockName(string blockName) {
+            if (blockName == AcquaticBlocks.Cobblestone) return AcquaticBlocks.CobblestoneSlab;
+            if (blockName == AcquaticBlocks.DeepslateTiles) return AcquaticBlocks.DeepslateTileSlab;
+            if (blockName == AcquaticBlocks.PolishedTuff) return AcquaticBlocks.PolishedTuffSlab;
+            if (blockName == AcquaticBlocks.MudBricks) return AcquaticBlocks.MudBrickSlab;
+            if (blockName == AcquaticBlocks.Tuff) return AcquaticBlocks.TuffSlab;
+            if (blockName == AcquaticBlocks.PolishedAndesite) return AcquaticBlocks.PolishedAndesiteSlab;
+            if (blockName == AcquaticBlocks.Stone) return AcquaticBlocks.StoneSlab;
+            if (blockName == AcquaticBlocks.Bricks) return AcquaticBlocks.BrickSlab;
+            if (blockName == AcquaticBlocks.Sandstone) return AcquaticBlocks.SandstoneSlab;
+            if (blockName == AcquaticBlocks.OakPlanks) return AcquaticBlocks.OakSlab;
+            if (blockName == AcquaticBlocks.MossyCobblestone) return AcquaticBlocks.MossyCobblestoneSlab;
+            if (blockName == AcquaticBlocks.WarpedPlanks) return AcquaticBlocks.WarpedSlab;
+            if (blockName == AcquaticBlocks.SprucePlanks) return AcquaticBlocks.SpruceSlab;
+            if (blockName == AcquaticBlocks.SmoothStone) return AcquaticBlocks.SmoothStoneSlab;
             return blockName;
         }
 
@@ -2855,11 +3002,14 @@ namespace MinecraftMapper {
                             width = 3;
                             blockName = AcquaticBlocks.TuffSlab;
                             break;
+                        case OsmReader.RoadType.Secondary:
+                            width = (way.Lanes ?? 3) * 3;
+                            blockName = AcquaticBlocks.SmoothStoneSlab;
+                            break;
                         case OsmReader.RoadType.Residential:
                         case OsmReader.RoadType.Primary:
-                        case OsmReader.RoadType.Secondary:
                         case OsmReader.RoadType.Trunk:
-                            width = (way.Lanes ?? 3) * 4;
+                            width = (way.Lanes ?? 2) * 4;
                             blockName = AcquaticBlocks.SmoothStoneSlab;
                             break;
                         case OsmReader.RoadType.MotorwayLink:

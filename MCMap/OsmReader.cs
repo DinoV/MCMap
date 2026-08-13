@@ -264,9 +264,10 @@ namespace MinecraftMapper {
             public readonly Surface Surface;
             public readonly bool OneWay;
             public readonly bool Bridge;
+            public readonly bool Roundabout;
             public readonly long Id;
 
-            public Way(long id, string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay, bool bridge) {
+            public Way(long id, string name, Node[] nodes, int? lanes, RoadType roadType, Sidewalk sidewalk, int? layer, CrossingType crossing, Surface surface, bool oneWay, bool bridge, bool roundabout) {
                 Id = id;
                 Name = name;
                 Nodes = nodes;
@@ -275,6 +276,7 @@ namespace MinecraftMapper {
                 Sidewalk = sidewalk;
                 OneWay = oneWay;
                 Bridge = bridge;
+                Roundabout = roundabout;
                 Layer = layer;
                 Crossing = crossing;
                 Surface = surface;
@@ -396,7 +398,8 @@ namespace MinecraftMapper {
                                 tags.crossing,
                                 tags.surface,
                                 tags.oneWay,
-                                tags.bridge
+                                tags.bridge,
+                                tags.roundabout
                             );
                         } else if (tags.roadType == RoadType.BusStop) {
                             if (tags.name != null && (tags.shelter ?? false || (tags.covered ?? false))) {
@@ -495,7 +498,8 @@ namespace MinecraftMapper {
                                 tags.crossing,
                                 tags.surface,
                                 tags.oneWay,
-                                tags.bridge
+                                tags.bridge,
+                                tags.roundabout
                             );
                             foreach (var point in nodes) {
                                 List<Way> ways;
@@ -719,6 +723,7 @@ namespace MinecraftMapper {
             public SignType signType;
             public bool oneWay;
             public bool bridge;
+            public bool roundabout;
             public RoofType roofType;
             public double? roofHeight;
             internal Color? roofColor;
@@ -789,6 +794,9 @@ namespace MinecraftMapper {
             switch (key) {
                 case "bridge":
                     tagInfo.bridge = value != "no";
+                    break;
+                case "junction":
+                    tagInfo.roundabout = value == "roundabout";
                     break;
                 case "leisure":
                     if (value == "park") {
@@ -1052,7 +1060,7 @@ namespace MinecraftMapper {
                         case "track": break;
                         case "trunk_link": break;
                         case "primary_link": break;
-                        case "secondary_link": break;
+                        case "secondary_link": tagInfo.roadType = RoadType.Secondary; break;
                         case "tertiary_link": break;
                         case "unclassified": break;
                         case "pedestrian": break;
