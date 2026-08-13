@@ -27,9 +27,9 @@ namespace MinecraftMapper {
             return new BlockPosition((int)xtile, (int)ytile);
         }
 
-        public PositionBase(double baseZ, double baseX, int mcX, int mcZ) {
-            this.baseZ = Lat2YMeters(baseZ);
-            this.baseX = Long2XMeters(baseX);
+        public PositionBase(double latitude, double longitude, int mcX, int mcZ) {
+            this.baseX = Long2XMeters(longitude);
+            this.baseZ = Lat2YMeters(latitude);
             this.mcX = mcX;
             this.mcZ = mcZ;
         }

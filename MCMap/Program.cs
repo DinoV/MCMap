@@ -17,7 +17,9 @@ namespace MinecraftMapper {
         private readonly StreamWriter _log;
         private readonly bool _dryRun = false;
 
-        public Mapper(string log, string world, string osmXml, PositionBase[] conversions, long[] buildings, long[] roads) {
+        public Mapper(string log, string world, string osmXml, double north, double west,
+                double? east, double? south, int mcX, int mcZ,
+                long[] buildings, long[] roads) {
             _world = NbtWorld.Open(world);
             _buildings = buildings;
             _roads = roads;
@@ -66,7 +68,17 @@ namespace MinecraftMapper {
             int worldMaxX = (maxChunkX + 1) << _bm.ChunkXLog;
             int worldMaxZ = (maxChunkZ + 1) << _bm.ChunkZLog;
 
-            _conv = new PositionConverter(worldX, worldZ, worldMaxX, worldMaxZ, conversions);
+#if FALSE
+            // Creates duwamish map
+            _conv = new PositionConverter(worldMaxX, worldMaxZ);
+#else
+            _conv = east.HasValue && south.HasValue
+                ? PositionConverter.FromLatLongBounds(
+                    worldMaxX, worldMaxZ, west, north,
+                    east.Value, south.Value, mcX, mcZ)
+                : PositionConverter.FromLatLong(
+                    worldMaxX, worldMaxZ, north, west, mcX, mcZ);
+#endif
             _reader = new OsmReader(osmXml);
             /*
             HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
@@ -443,6 +455,9 @@ namespace MinecraftMapper {
             List<long> buildings = new List<long>();
             List<long> roads = new List<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
+            double north = 47.6943276, west = -122.3727171;
+            double? east = null, south = null;
+            int mcX = 0, mcZ = 0;
             foreach (var arg in args) {
                 if (arg == "/?" || arg == "/help") {
                     Help();
@@ -467,19 +482,31 @@ namespace MinecraftMapper {
                         return 1;
                     }
                     roads.Add(road);
-                } else if (arg.StartsWith("/pos:")) {
-                    var coords = arg.Substring("/pos:".Length).Split(',');
-                    double lat, lng;
-                    int mcX, mcZ;
+                } else if (arg.StartsWith("/bounds:")) {
+                    var coords = arg.Substring("/bounds:".Length).Split(',');
+                    double parsedWest, parsedNorth, parsedEast, parsedSouth;
                     if (coords.Length != 4 ||
-                        !double.TryParse(coords[0], out lat) ||
-                        !double.TryParse(coords[1], out lng) ||
-                        !int.TryParse(coords[2], out mcX) ||
-                        !int.TryParse(coords[3], out mcZ)) {
-                        Console.WriteLine("Expected /pos:<lat>,<long>,X,Y");
+                        !double.TryParse(coords[0], out parsedWest) ||
+                        !double.TryParse(coords[1], out parsedNorth) ||
+                        !double.TryParse(coords[2], out parsedEast) ||
+                        !double.TryParse(coords[3], out parsedSouth) ||
+                        parsedWest >= parsedEast || parsedSouth >= parsedNorth) {
+                        Console.WriteLine("Expected /bounds:<west>,<north>,<east>,<south>");
                         return 1;
                     }
-                    positionBases.Add(new PositionBase(lat, lng, mcX, mcZ));
+                    west = parsedWest;
+                    north = parsedNorth;
+                    east = parsedEast;
+                    south = parsedSouth;
+                } else if (arg.StartsWith("/offset:")) {
+                    var coords = arg.Substring("/offset:".Length).Split(',');
+                    if (coords.Length != 2 ||
+                        !int.TryParse(coords[0], out mcX) ||
+                        !int.TryParse(coords[1], out mcZ)) {
+                        Console.WriteLine("Expected /offset:X,Z");
+                        return 1;
+                    }
+
                 }
             }
             if (map == null) {
@@ -489,19 +516,8 @@ namespace MinecraftMapper {
             var world = NbtWorld.Open(map);
             Console.WriteLine(world);
 
-            var seattle = new[] {
-                new PositionBase(47.68489, -122.33745, 1877, 1412),
-                new PositionBase(47.6073105, -122.3420636, 1092, 15572),
-                new PositionBase(47.6493244, -122.2757343, 9380, 8023),
-                new PositionBase(47.5859511, -122.2863789, 7917, 19462),
-                new PositionBase(47.6068780, -122.2987088, 6446, 15665),
-                new PositionBase(47.6683035, -122.2757863, 9353, 4472)
-            };
-
-            if (positionBases.Count == 0) {
-                positionBases.AddRange(seattle);
-            }
-            var mapper = new Mapper(log, map, osmData, positionBases.ToArray(), buildings.ToArray(), roads.ToArray());
+            var mapper = new Mapper(log, map, osmData, north, west, east, south,
+                mcX, mcZ, buildings.ToArray(), roads.ToArray());
             mapper.MapIt();
             return 0;
         }
@@ -511,7 +527,8 @@ namespace MinecraftMapper {
             Console.WriteLine(" /help                         - This help");
             Console.WriteLine(" /map:<map>                    - Specifies path to Minecraft Java Edition save directory");
             Console.WriteLine(" /osm:<osm.xml>                - Specifies path to Open Street Map .xml file");
-            Console.WriteLine(" /pos:<lat>,<long>,<mcX>,<mcZ> - Provides mapping between lat/long and Minecraft X/Z, multiple are allowed");
+            Console.WriteLine(" /bounds:<west>,<north>,<east>,<south> - Specifies the same geographic crop passed to lidar.py");
+            Console.WriteLine(" /offset:X,Z                   - Provides an extra offset in Minecraft blocks that's applied from the lat,long");
             Console.WriteLine(" /building:<osmWay>            - Limit buildings to be drawn, multiple can be specified");
             Console.WriteLine(" /road:<osmWay>                - Limit roads to be drawn, multiple can be specified");
         }
