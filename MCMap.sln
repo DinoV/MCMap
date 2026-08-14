@@ -1,11 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.27703.2018
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34525.116
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MCMap", "MCMap\MCMap.csproj", "{291FD14F-DCB2-442F-97EE-4179A342F2CD}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Substrate (NET4)", "Substrate\SubstrateCS\Substrate (NET4).csproj", "{7264A1C4-AB4A-4437-B252-7379B98B5509}"
+EndProject
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "lidar", "lidar\lidar.pyproj", "{5F7D390F-06E8-4161-B1EF-09D33E460C69}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +23,8 @@ Global
 		{7264A1C4-AB4A-4437-B252-7379B98B5509}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7264A1C4-AB4A-4437-B252-7379B98B5509}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7264A1C4-AB4A-4437-B252-7379B98B5509}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5F7D390F-06E8-4161-B1EF-09D33E460C69}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5F7D390F-06E8-4161-B1EF-09D33E460C69}.Release|Any CPU.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

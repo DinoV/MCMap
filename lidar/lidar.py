@@ -1,0 +1,1237 @@
+#!/usr/bin/env python3
+"""Create a WorldPainter-ready PNG using the GDAL Python API directly.
+
+This is the in-process equivalent of the earlier four-command workflow:
+
+1. Open the source VRT, crop it with an EPSG:4326 longitude/latitude window,
+   resample to a one-metre grid, and expand the east and south edges so the
+   raster dimensions are multiples of 512 pixels while preserving the
+   requested upper-left corner.
+2. Compute the stretch range from the originally requested (unpadded)
+   window by default, then convert the full 512-aligned raster to an 8-bit
+   grayscale image using that range and a configurable exponent (default:
+   0.42). This preserves the contrast of the original four-command workflow
+   even when alignment adds terrain to the east or south.
+3. Preserve the selected water byte value while applying a configurable floor
+   to non-water values, using NumPy and GDAL block I/O.
+4. Create the final PNG through the PNG driver's CreateCopy() API.
+5. Report the exact final aligned raster bounds in the source CRS and in
+   EPSG:4326, including the four geographic corner coordinates.
+
+No subprocesses or command-line GDAL programs are invoked. Run the script from
+an environment containing both GDAL's Python bindings and NumPy, for example:
+
+    "C:\\Users\\dino_\\anaconda3\\condabin\\conda.bat" run python \
+        make_minecraft_heightmap_gdal_api.py \
+        --vrt WA_KingCo_1_2021.vrt \
+        --west -122.3539083 --north 47.5558653 \
+        --east -122.2837235 --south 47.4723506 \
+        --output duwamish-larger.png \
+        --clip-level 100
+
+The King County VRT uses EPSG:6597, whose horizontal unit is the U.S. survey
+foot. Therefore the requested metres-per-pixel value is converted to survey
+feet before it is passed to gdal.Translate().
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+import sys
+import tempfile
+from typing import Any
+
+
+US_SURVEY_FEET_PER_METER = 3937.0 / 1200.0
+DEFAULT_METERS_PER_PIXEL = 1.0
+DEFAULT_STRETCH_EXPONENT = 0.42
+DEFAULT_LAND_START = 8
+DEFAULT_WATER_INPUT_VALUE = 0
+DEFAULT_CHUNK_ROWS = 512
+DEFAULT_TILE_SIZE_PIXELS = 512
+OUTPUT_MAXIMUM = 200
+
+
+@dataclass(frozen=True)
+class Coordinate:
+    """A two-dimensional coordinate."""
+
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class Bounds:
+    """A rectangular envelope in GDAL -projwin order."""
+
+    west: float
+    north: float
+    east: float
+    south: float
+
+
+@dataclass(frozen=True)
+class MapBounds:
+    """Projected and geographic bounds for the final aligned raster."""
+
+    source_crs_label: str
+    source_crs_argument: str | None
+    projected: Bounds
+    geographic: Bounds
+    north_west: Coordinate
+    north_east: Coordinate
+    south_east: Coordinate
+    south_west: Coordinate
+
+
+class ProgressReporter:
+    """A quiet GDAL progress callback that reports every five percent."""
+
+    def __init__(self, label: str) -> None:
+        self._label = label
+        self._next_percent = 0
+        self._finished = False
+
+    def __call__(self, complete: float, message: str, callback_data: Any) -> int:
+        del message, callback_data
+
+        percent = max(0, min(100, int(complete * 100.0)))
+        if percent >= self._next_percent or percent == 100:
+            print(f"\r{self._label}: {percent:3d}%", end="", flush=True)
+            self._next_percent = ((percent // 5) + 1) * 5
+
+        if percent >= 100:
+            self.finish()
+
+        return 1
+
+    def finish(self) -> None:
+        if not self._finished:
+            print()
+            self._finished = True
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Crop an EPSG:6597 elevation VRT, create a metric raster, "
+            "stretch it, apply a non-water floor, and emit an 8-bit PNG "
+            "without spawning GDAL command-line processes."
+        )
+    )
+
+    parser.add_argument(
+        "--vrt",
+        required=True,
+        help="Input VRT filename, URL, or GDAL /vsi path.",
+    )
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Final PNG filename, for example duwamish-larger.png.",
+    )
+
+    bounds = parser.add_argument_group("geographic crop")
+    bounds.add_argument("--west", required=True, type=float, help="West longitude.")
+    bounds.add_argument("--north", required=True, type=float, help="North latitude.")
+    bounds.add_argument("--east", required=True, type=float, help="East longitude.")
+    bounds.add_argument("--south", required=True, type=float, help="South latitude.")
+
+    parser.add_argument(
+        "--projwin-srs",
+        default="EPSG:4326",
+        help=(
+            "Coordinate reference system of the four crop values. "
+            "Default: EPSG:4326."
+        ),
+    )
+    parser.add_argument(
+        "--clip-level",
+        required=True,
+        type=int,
+        help=(
+            "Minimum output value for non-water pixels, normally 60, 65, "
+            "or 100."
+        ),
+    )
+    parser.add_argument(
+        "--land-start",
+        type=int,
+        default=DEFAULT_LAND_START,
+        help=(
+            "Stretched input value mapped exactly to --clip-level. Values "
+            "between the water value and this value are clipped to the floor. "
+            "Default: 8."
+        ),
+    )
+    parser.add_argument(
+        "--water-value",
+        type=int,
+        default=DEFAULT_WATER_INPUT_VALUE,
+        help=(
+            "Exact value in the stretched image preserved as water. "
+            "Default: 0."
+        ),
+    )
+    parser.add_argument(
+        "--exponent",
+        type=float,
+        default=DEFAULT_STRETCH_EXPONENT,
+        help="Exponent for the automatic 8-bit stretch. Default: 0.42.",
+    )
+    parser.add_argument(
+        "--stretch-scope",
+        choices=("requested", "aligned"),
+        default="requested",
+        help=(
+            "Area used to calculate the automatic stretch minimum and "
+            "maximum. 'requested' ignores the 512-alignment padding and "
+            "matches the contrast of the original unpadded workflow; "
+            "'aligned' includes the added east/south terrain. "
+            "Default: requested."
+        ),
+    )
+    parser.add_argument(
+        "--scale-min",
+        type=float,
+        help=(
+            "Optional explicit source elevation mapped to output 0. Must be "
+            "used together with --scale-max. Overrides --stretch-scope."
+        ),
+    )
+    parser.add_argument(
+        "--scale-max",
+        type=float,
+        help=(
+            "Optional explicit source elevation mapped to output 255. Must "
+            "be used together with --scale-min. Overrides --stretch-scope."
+        ),
+    )
+    parser.add_argument(
+        "--meters-per-pixel",
+        type=float,
+        default=DEFAULT_METERS_PER_PIXEL,
+        help="Horizontal output resolution in metres. Default: 1.0.",
+    )
+    parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=DEFAULT_TILE_SIZE_PIXELS,
+        help=(
+            "Expand the raster eastward and southward until both dimensions "
+            "are multiples of this many pixels, preserving the upper-left "
+            "corner. Default: 512."
+        ),
+    )
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=DEFAULT_CHUNK_ROWS,
+        help=(
+            "Rows processed at once during the NumPy clipping stage. "
+            "Default: 512."
+        ),
+    )
+    parser.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help=(
+            "Keep the resampled TIFF, stretched PNG, and clipped TIFF in a "
+            "directory next to the final output."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing an existing final output file.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and print the processing plan without loading GDAL.",
+    )
+
+    return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if not args.west < args.east:
+        raise ValueError("--west must be less than --east.")
+    if not args.south < args.north:
+        raise ValueError("--south must be less than --north.")
+    if not 1 <= args.clip_level <= 254:
+        raise ValueError("--clip-level must be between 1 and 254.")
+    if not 1 <= args.land_start <= 254:
+        raise ValueError("--land-start must be between 1 and 254.")
+    if not 0 <= args.water_value <= 255:
+        raise ValueError("--water-value must be between 0 and 255.")
+    if args.water_value == args.land_start:
+        raise ValueError("--water-value and --land-start must differ.")
+    if args.exponent <= 0.0:
+        raise ValueError("--exponent must be greater than zero.")
+    if (args.scale_min is None) != (args.scale_max is None):
+        raise ValueError("--scale-min and --scale-max must be supplied together.")
+    if args.scale_min is not None:
+        if not args.scale_min < args.scale_max:
+            raise ValueError("--scale-min must be less than --scale-max.")
+    if args.meters_per_pixel <= 0.0:
+        raise ValueError("--meters-per-pixel must be greater than zero.")
+    if args.tile_size <= 0:
+        raise ValueError("--tile-size must be greater than zero.")
+    if args.chunk_rows <= 0:
+        raise ValueError("--chunk-rows must be greater than zero.")
+
+    output = Path(args.output)
+    if output.suffix.lower() != ".png":
+        raise ValueError("--output must end in .png.")
+    if output.exists() and not args.overwrite and not args.dry_run:
+        raise FileExistsError(
+            f"Output already exists: {output}. Use --overwrite to replace it."
+        )
+
+    vrt = args.vrt
+    is_virtual_path = vrt.startswith("/vsi") or "://" in vrt
+    if not is_virtual_path and not Path(vrt).exists():
+        raise FileNotFoundError(f"Input VRT does not exist: {vrt}")
+
+
+def load_dependencies() -> tuple[Any, Any, Any]:
+    try:
+        import numpy as np
+    except ImportError as error:
+        raise RuntimeError(
+            "NumPy is not installed in this Python environment."
+        ) from error
+
+    try:
+        from osgeo import gdal, osr
+    except ImportError as error:
+        raise RuntimeError(
+            "The GDAL Python bindings (the 'osgeo' package) are not installed "
+            "in this Python environment. Run the script through the Conda "
+            "environment in which gdal_translate works."
+        ) from error
+
+    gdal.UseExceptions()
+    return gdal, np, osr
+
+
+def remove_dataset_files(path: Path) -> None:
+    """Remove a raster and common sidecars left by GDAL/PAM."""
+
+    candidates = (
+        path,
+        Path(f"{path}.aux.xml"),
+        path.with_suffix(".wld"),
+        path.with_suffix(".pgw"),
+        path.with_suffix(".tfw"),
+    )
+
+    for candidate in candidates:
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def copy_spatial_reference(source: Any, destination: Any) -> None:
+    projection = source.GetProjection()
+    if projection:
+        destination.SetProjection(projection)
+
+    try:
+        geotransform = source.GetGeoTransform()
+    except RuntimeError:
+        geotransform = None
+
+    if geotransform is not None:
+        destination.SetGeoTransform(geotransform)
+
+
+def set_traditional_axis_order(osr: Any, spatial_reference: Any) -> None:
+    """Use conventional GIS X/Y ordering when the GDAL version supports it."""
+
+    strategy = getattr(osr, "OAMS_TRADITIONAL_GIS_ORDER", None)
+    setter = getattr(spatial_reference, "SetAxisMappingStrategy", None)
+    if strategy is not None and setter is not None:
+        setter(strategy)
+
+
+def spatial_reference_identity(
+    spatial_reference: Any,
+) -> tuple[str, str | None]:
+    """Return a readable CRS label and, when possible, an authority ID."""
+
+    authority_name = spatial_reference.GetAuthorityName(None)
+    authority_code = spatial_reference.GetAuthorityCode(None)
+
+    # Some WKT variants attach the authority to a projected-CRS node rather
+    # than the root. Try both WKT1 and WKT2 node names.
+    if not authority_name or not authority_code:
+        for node_name in ("PROJCS", "PROJCRS"):
+            authority_name = spatial_reference.GetAuthorityName(node_name)
+            authority_code = spatial_reference.GetAuthorityCode(node_name)
+            if authority_name and authority_code:
+                break
+
+    authority_id = None
+    if authority_name and authority_code:
+        authority_id = f"{authority_name}:{authority_code}"
+
+    get_name = getattr(spatial_reference, "GetName", None)
+    crs_name = (
+        (get_name() if get_name is not None else None)
+        or spatial_reference.GetAttrValue("PROJCRS")
+        or spatial_reference.GetAttrValue("PROJCS")
+        or spatial_reference.GetAttrValue("GEOGCRS")
+        or spatial_reference.GetAttrValue("GEOGCS")
+        or "unnamed coordinate reference system"
+    )
+
+    if authority_id is None:
+        return crs_name, None
+
+    return f"{authority_id} ({crs_name})", authority_id
+
+
+def pixel_to_map_coordinate(
+    geotransform: tuple[float, ...],
+    pixel_x: float,
+    pixel_y: float,
+) -> Coordinate:
+    """Apply a six-element GDAL geotransform to a pixel corner."""
+
+    return Coordinate(
+        x=(
+            float(geotransform[0])
+            + pixel_x * float(geotransform[1])
+            + pixel_y * float(geotransform[2])
+        ),
+        y=(
+            float(geotransform[3])
+            + pixel_x * float(geotransform[4])
+            + pixel_y * float(geotransform[5])
+        ),
+    )
+
+
+def read_map_bounds(
+    *,
+    gdal: Any,
+    osr: Any,
+    raster_path: Path,
+) -> MapBounds:
+    """Read exact projected and WGS84 bounds from the aligned raster."""
+
+    dataset = gdal.Open(str(raster_path), gdal.GA_ReadOnly)
+    if dataset is None:
+        raise RuntimeError(f"GDAL could not open the aligned TIFF: {raster_path}")
+
+    try:
+        geotransform = dataset.GetGeoTransform()
+        if geotransform is None or len(geotransform) != 6:
+            raise RuntimeError(
+                "The aligned raster does not contain a usable geotransform."
+            )
+
+        projection = dataset.GetProjectionRef() or dataset.GetProjection()
+        if not projection:
+            raise RuntimeError(
+                "The aligned raster does not contain a coordinate reference "
+                "system, so geographic bounds cannot be calculated."
+            )
+
+        source_srs = osr.SpatialReference()
+        if source_srs.ImportFromWkt(projection) != 0:
+            raise RuntimeError(
+                "GDAL could not parse the aligned raster's coordinate "
+                "reference system."
+            )
+        set_traditional_axis_order(osr, source_srs)
+
+        target_srs = osr.SpatialReference()
+        if target_srs.ImportFromEPSG(4326) != 0:
+            raise RuntimeError("GDAL could not initialise EPSG:4326.")
+        set_traditional_axis_order(osr, target_srs)
+
+        width = float(dataset.RasterXSize)
+        height = float(dataset.RasterYSize)
+
+        projected_north_west = pixel_to_map_coordinate(
+            geotransform, 0.0, 0.0
+        )
+        projected_north_east = pixel_to_map_coordinate(
+            geotransform, width, 0.0
+        )
+        projected_south_east = pixel_to_map_coordinate(
+            geotransform, width, height
+        )
+        projected_south_west = pixel_to_map_coordinate(
+            geotransform, 0.0, height
+        )
+        projected_corners = (
+            projected_north_west,
+            projected_north_east,
+            projected_south_east,
+            projected_south_west,
+        )
+
+        projected_bounds = Bounds(
+            west=min(point.x for point in projected_corners),
+            north=max(point.y for point in projected_corners),
+            east=max(point.x for point in projected_corners),
+            south=min(point.y for point in projected_corners),
+        )
+
+        coordinate_transform = osr.CoordinateTransformation(
+            source_srs, target_srs
+        )
+
+        def to_wgs84(point: Coordinate) -> Coordinate:
+            transformed = coordinate_transform.TransformPoint(point.x, point.y)
+            if transformed is None or len(transformed) < 2:
+                raise RuntimeError(
+                    "GDAL failed to transform a raster corner to EPSG:4326."
+                )
+            # Traditional GIS axis order makes X longitude and Y latitude.
+            return Coordinate(x=float(transformed[0]), y=float(transformed[1]))
+
+        north_west = to_wgs84(projected_north_west)
+        north_east = to_wgs84(projected_north_east)
+        south_east = to_wgs84(projected_south_east)
+        south_west = to_wgs84(projected_south_west)
+        geographic_corners = (
+            north_west,
+            north_east,
+            south_east,
+            south_west,
+        )
+
+        geographic_bounds = Bounds(
+            west=min(point.x for point in geographic_corners),
+            north=max(point.y for point in geographic_corners),
+            east=max(point.x for point in geographic_corners),
+            south=min(point.y for point in geographic_corners),
+        )
+
+        source_crs_label, source_crs_argument = spatial_reference_identity(
+            source_srs
+        )
+
+        return MapBounds(
+            source_crs_label=source_crs_label,
+            source_crs_argument=source_crs_argument,
+            projected=projected_bounds,
+            geographic=geographic_bounds,
+            north_west=north_west,
+            north_east=north_east,
+            south_east=south_east,
+            south_west=south_west,
+        )
+    finally:
+        dataset = None
+
+
+def print_map_bounds(bounds: MapBounds) -> None:
+    """Print final raster bounds in human- and GDAL-friendly forms."""
+
+    projected = bounds.projected
+    geographic = bounds.geographic
+
+    print("\nFinal aligned map bounds:")
+    print(f"  Source CRS: {bounds.source_crs_label}")
+    print("  Projected envelope (west, north, east, south):")
+    print(
+        "    "
+        f"{projected.west:.9f} {projected.north:.9f} "
+        f"{projected.east:.9f} {projected.south:.9f}"
+    )
+    print("  EPSG:4326 envelope (west, north, east, south):")
+    print(
+        "    "
+        f"{geographic.west:.10f} {geographic.north:.10f} "
+        f"{geographic.east:.10f} {geographic.south:.10f}"
+    )
+    print("  Exact EPSG:4326 corners (longitude, latitude):")
+    print(
+        f"    northwest: {bounds.north_west.x:.10f}, "
+        f"{bounds.north_west.y:.10f}"
+    )
+    print(
+        f"    northeast: {bounds.north_east.x:.10f}, "
+        f"{bounds.north_east.y:.10f}"
+    )
+    print(
+        f"    southeast: {bounds.south_east.x:.10f}, "
+        f"{bounds.south_east.y:.10f}"
+    )
+    print(
+        f"    southwest: {bounds.south_west.x:.10f}, "
+        f"{bounds.south_west.y:.10f}"
+    )
+
+    if bounds.source_crs_argument is not None:
+        print("  Reusable projected GDAL window:")
+        print(
+            "    -projwin "
+            f"{projected.west:.9f} {projected.north:.9f} "
+            f"{projected.east:.9f} {projected.south:.9f} "
+            f"-projwin_srs {bounds.source_crs_argument}"
+        )
+
+    print("  Reusable geographic GDAL window:")
+    print(
+        "    -projwin "
+        f"{geographic.west:.10f} {geographic.north:.10f} "
+        f"{geographic.east:.10f} {geographic.south:.10f} "
+        "-projwin_srs EPSG:4326"
+    )
+
+
+def round_up_to_multiple(value: int, multiple: int) -> int:
+    """Round a positive integer up to the next positive multiple."""
+
+    if value <= 0:
+        raise ValueError("value must be greater than zero.")
+    if multiple <= 0:
+        raise ValueError("multiple must be greater than zero.")
+
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def crop_and_resample(
+    *,
+    gdal: Any,
+    source_vrt: str,
+    output_tif: Path,
+    west: float,
+    north: float,
+    east: float,
+    south: float,
+    projwin_srs: str,
+    metres_per_pixel: float,
+    tile_size: int,
+) -> tuple[int, int, int, int]:
+    print("\nStage 1/4: cropping, aligning, and resampling the VRT")
+
+    source = gdal.OpenEx(source_vrt, gdal.OF_RASTER | gdal.OF_READONLY)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the input VRT: {source_vrt}")
+
+    resolution_us_ft = metres_per_pixel * US_SURVEY_FEET_PER_METER
+    preview_vrt = output_tif.with_name(f"{output_tif.stem}-requested-window.vrt")
+    remove_dataset_files(preview_vrt)
+
+    requested = None
+    result = None
+    try:
+        # Create a lightweight VRT describing the crop GDAL would normally
+        # create. Its geotransform supplies the exact upper-left anchor and
+        # pixel size without first materialising the raster data.
+        preview_options = gdal.TranslateOptions(
+            format="VRT",
+            outputType=gdal.GDT_Float32,
+            projWin=[west, north, east, south],
+            projWinSRS=projwin_srs,
+            xRes=resolution_us_ft,
+            yRes=resolution_us_ft,
+            resampleAlg="average",
+            overviewLevel="NONE",
+        )
+
+        requested = gdal.Translate(
+            str(preview_vrt),
+            source,
+            options=preview_options,
+        )
+        if requested is None:
+            raise RuntimeError(
+                "gdal.Translate() could not describe the requested crop."
+            )
+
+        requested_width = int(requested.RasterXSize)
+        requested_height = int(requested.RasterYSize)
+        if requested_width <= 0 or requested_height <= 0:
+            raise RuntimeError(
+                "The requested geographic crop produced an empty raster."
+            )
+
+        geotransform = requested.GetGeoTransform()
+        if geotransform is None or len(geotransform) != 6:
+            raise RuntimeError(
+                "GDAL did not provide a usable geotransform for the "
+                "requested crop."
+            )
+
+        pixel_scale = max(
+            abs(float(geotransform[1])),
+            abs(float(geotransform[5])),
+            1.0,
+        )
+        rotation_tolerance = pixel_scale * 1e-12
+        if (
+            abs(float(geotransform[2])) > rotation_tolerance
+            or abs(float(geotransform[4])) > rotation_tolerance
+        ):
+            raise RuntimeError(
+                "The requested crop has a rotated geotransform. This script "
+                "requires a north-up raster so it can preserve the upper-left "
+                "corner and expand only eastward and southward."
+            )
+        if geotransform[1] <= 0.0 or geotransform[5] >= 0.0:
+            raise RuntimeError(
+                "The requested crop does not have the expected north-up pixel "
+                "orientation."
+            )
+
+        aligned_width = round_up_to_multiple(requested_width, tile_size)
+        aligned_height = round_up_to_multiple(requested_height, tile_size)
+        added_columns = aligned_width - requested_width
+        added_rows = aligned_height - requested_height
+
+        upper_left_x = float(geotransform[0])
+        upper_left_y = float(geotransform[3])
+        lower_right_x = upper_left_x + aligned_width * float(geotransform[1])
+        lower_right_y = upper_left_y + aligned_height * float(geotransform[5])
+
+        print(f"  Requested size: {requested_width} x {requested_height}")
+        print(f"  Aligned size:   {aligned_width} x {aligned_height}")
+        print(
+            f"  Expansion:      {added_columns} pixel(s) east, "
+            f"{added_rows} pixel(s) south"
+        )
+
+        progress = ProgressReporter("Crop/resample")
+        options = gdal.TranslateOptions(
+            format="GTiff",
+            outputType=gdal.GDT_Float32,
+            projWin=[
+                upper_left_x,
+                upper_left_y,
+                lower_right_x,
+                lower_right_y,
+            ],
+            # The planned geotransform is already expressed in the source
+            # VRT's coordinate system, so projWinSRS should be omitted here.
+            width=aligned_width,
+            height=aligned_height,
+            resampleAlg="average",
+            overviewLevel="NONE",
+            creationOptions=[
+                "TILED=YES",
+                "COMPRESS=DEFLATE",
+                "PREDICTOR=3",
+                "BIGTIFF=IF_SAFER",
+            ],
+            callback=progress,
+        )
+
+        try:
+            result = gdal.Translate(str(output_tif), source, options=options)
+        finally:
+            progress.finish()
+
+        if result is None:
+            raise RuntimeError("gdal.Translate() did not create the cropped TIFF.")
+        result.FlushCache()
+
+        width = int(result.RasterXSize)
+        height = int(result.RasterYSize)
+        if width != aligned_width or height != aligned_height:
+            raise RuntimeError(
+                "GDAL created an unexpectedly sized aligned raster: "
+                f"{width} x {height}; expected "
+                f"{aligned_width} x {aligned_height}."
+            )
+
+        result_geotransform = result.GetGeoTransform()
+        anchor_tolerance = pixel_scale * 1e-8
+        if (
+            abs(float(result_geotransform[0]) - upper_left_x) > anchor_tolerance
+            or abs(float(result_geotransform[3]) - upper_left_y)
+            > anchor_tolerance
+        ):
+            raise RuntimeError(
+                "GDAL shifted the upper-left anchor while creating the aligned "
+                "raster."
+            )
+    finally:
+        result = None
+        requested = None
+        source = None
+        remove_dataset_files(preview_vrt)
+
+    return requested_width, requested_height, width, height
+
+
+def compute_stretch_range(
+    *,
+    gdal: Any,
+    np: Any,
+    source_tif: Path,
+    width: int,
+    height: int,
+    chunk_rows: int,
+    label: str,
+) -> tuple[float, float]:
+    """Compute an exact valid-data min/max over an upper-left raster window.
+
+    The aligned raster keeps the requested upper-left corner and pixel grid,
+    so the original unpadded crop is exactly the window (0, 0, width, height).
+    Computing statistics over that window prevents the east/south alignment
+    padding from changing the contrast of the requested map area.
+    """
+
+    source = gdal.Open(str(source_tif), gdal.GA_ReadOnly)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the resampled TIFF: {source_tif}")
+
+    band = source.GetRasterBand(1)
+    if band is None:
+        source = None
+        raise RuntimeError("The resampled TIFF does not contain raster band 1.")
+
+    if width <= 0 or height <= 0:
+        source = None
+        raise ValueError("The statistics window must have positive dimensions.")
+    if width > source.RasterXSize or height > source.RasterYSize:
+        source = None
+        raise ValueError(
+            "The statistics window extends beyond the aligned raster: "
+            f"{width} x {height} versus "
+            f"{source.RasterXSize} x {source.RasterYSize}."
+        )
+
+    no_data = band.GetNoDataValue()
+    mask_flags = band.GetMaskFlags()
+    all_valid = bool(mask_flags & gdal.GMF_ALL_VALID)
+    mask_band = None if all_valid else band.GetMaskBand()
+
+    minimum = float("inf")
+    maximum = float("-inf")
+    found_valid_value = False
+    next_report = 0
+
+    print(
+        f"Computing the exact stretch range from {label}: "
+        f"{width} x {height} pixels"
+    )
+
+    try:
+        for y_offset in range(0, height, chunk_rows):
+            rows = min(chunk_rows, height - y_offset)
+            values = band.ReadAsArray(0, y_offset, width, rows)
+            if values is None:
+                raise RuntimeError(
+                    f"GDAL failed reading statistics rows {y_offset} through "
+                    f"{y_offset + rows - 1}."
+                )
+
+            valid = np.isfinite(values)
+
+            if no_data is not None:
+                if np.isnan(no_data):
+                    valid &= ~np.isnan(values)
+                else:
+                    valid &= values != no_data
+
+            if mask_band is not None:
+                mask_values = mask_band.ReadAsArray(0, y_offset, width, rows)
+                if mask_values is None:
+                    raise RuntimeError(
+                        f"GDAL failed reading the validity mask for rows "
+                        f"{y_offset} through {y_offset + rows - 1}."
+                    )
+                valid &= mask_values != 0
+
+            if np.any(valid):
+                valid_values = values[valid]
+                minimum = min(minimum, float(valid_values.min()))
+                maximum = max(maximum, float(valid_values.max()))
+                found_valid_value = True
+
+            percent = int(((y_offset + rows) / height) * 100.0)
+            if percent >= next_report or percent == 100:
+                print(f"\rStretch statistics: {percent:3d}%", end="", flush=True)
+                next_report = ((percent // 5) + 1) * 5
+
+        print()
+    finally:
+        source = None
+
+    if not found_valid_value or not minimum < maximum:
+        raise RuntimeError(
+            "The statistics window has no usable elevation range: "
+            f"min={minimum}, max={maximum}."
+        )
+
+    return minimum, maximum
+
+
+def stretch_to_byte_png(
+    *,
+    gdal: Any,
+    source_tif: Path,
+    output_png: Path,
+    exponent: float,
+    minimum: float,
+    maximum: float,
+) -> None:
+    print("\nStage 2/4: applying the grayscale stretch")
+
+    if not minimum < maximum:
+        raise ValueError("The stretch minimum must be less than its maximum.")
+
+    source = gdal.Open(str(source_tif), gdal.GA_ReadOnly)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the resampled TIFF: {source_tif}")
+
+    progress = ProgressReporter("Stretch")
+    options = gdal.TranslateOptions(
+        format="PNG",
+        outputType=gdal.GDT_Byte,
+        scaleParams=[[minimum, maximum, 0.0, float(OUTPUT_MAXIMUM)]],
+        exponents=[exponent],
+        colorInterpretation=["gray"],
+        callback=progress,
+    )
+
+    result = None
+    try:
+        result = gdal.Translate(str(output_png), source, options=options)
+        if result is None:
+            raise RuntimeError("gdal.Translate() did not create the stretched PNG.")
+        result.FlushCache()
+    finally:
+        progress.finish()
+        result = None
+        source = None
+
+
+def apply_land_floor(
+    *,
+    gdal: Any,
+    np: Any,
+    source_png: Path,
+    output_tif: Path,
+    clip_level: int,
+    land_start: int,
+    water_value: int,
+    chunk_rows: int,
+) -> None:
+    print("\nStage 3/4: applying the non-water floor")
+
+    source = gdal.Open(str(source_png), gdal.GA_ReadOnly)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the stretched PNG: {source_png}")
+
+    source_band = source.GetRasterBand(1)
+    if source_band is None:
+        source = None
+        raise RuntimeError("The stretched PNG does not contain raster band 1.")
+
+    width = source.RasterXSize
+    height = source.RasterYSize
+
+    driver = gdal.GetDriverByName("GTiff")
+    if driver is None:
+        source = None
+        raise RuntimeError("The GDAL GeoTIFF driver is unavailable.")
+
+    destination = driver.Create(
+        str(output_tif),
+        width,
+        height,
+        1,
+        gdal.GDT_Byte,
+        options=[
+            "TILED=YES",
+            "COMPRESS=DEFLATE",
+            "PREDICTOR=2",
+            "BIGTIFF=IF_SAFER",
+        ],
+    )
+    if destination is None:
+        source = None
+        raise RuntimeError(f"GDAL could not create the clipped TIFF: {output_tif}")
+
+    try:
+        copy_spatial_reference(source, destination)
+
+        destination_band = destination.GetRasterBand(1)
+        if destination_band is None:
+            raise RuntimeError("The clipped TIFF does not contain raster band 1.")
+        destination_band.SetColorInterpretation(gdal.GCI_GrayIndex)
+
+        output_span = float(OUTPUT_MAXIMUM - clip_level)
+        input_span = float(OUTPUT_MAXIMUM - land_start)
+        scale = output_span / input_span
+
+        next_report = 0
+        for y_offset in range(0, height, chunk_rows):
+            rows = min(chunk_rows, height - y_offset)
+            values = source_band.ReadAsArray(0, y_offset, width, rows)
+            if values is None:
+                raise RuntimeError(
+                    f"GDAL failed reading rows {y_offset} through "
+                    f"{y_offset + rows - 1}."
+                )
+
+            water_mask = values == water_value
+            output_values = (
+                clip_level
+                + (values.astype(np.float32) - float(land_start)) * scale
+            )
+            np.clip(
+                output_values,
+                float(clip_level),
+                float(OUTPUT_MAXIMUM),
+                out=output_values,
+            )
+            output_values[water_mask] = clip_level
+
+            # GDAL's numeric conversion rounds floating-point values when
+            # writing to an integer band. Make that rounding explicit.
+            byte_values = np.rint(output_values).astype(np.uint8)
+
+            error_code = destination_band.WriteArray(byte_values, 0, y_offset)
+            if error_code not in (None, 0):
+                raise RuntimeError(
+                    f"GDAL failed writing rows {y_offset} through "
+                    f"{y_offset + rows - 1}; error code {error_code}."
+                )
+
+            percent = int(((y_offset + rows) / height) * 100.0)
+            if percent >= next_report or percent == 100:
+                print(f"\rClip/floor: {percent:3d}%", end="", flush=True)
+                next_report = ((percent // 5) + 1) * 5
+
+        print()
+        destination_band.FlushCache()
+        destination.FlushCache()
+    finally:
+        destination = None
+        source = None
+
+
+def create_final_png(
+    *,
+    gdal: Any,
+    source_tif: Path,
+    output_png: Path,
+) -> None:
+    print("\nStage 4/4: creating the final PNG")
+
+    source = gdal.Open(str(source_tif), gdal.GA_ReadOnly)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the clipped TIFF: {source_tif}")
+
+    driver = gdal.GetDriverByName("PNG")
+    if driver is None:
+        source = None
+        raise RuntimeError("The GDAL PNG driver is unavailable.")
+
+    progress = ProgressReporter("PNG CreateCopy")
+    result = None
+    try:
+        # PNG is commonly a CreateCopy-only driver. This is why the clipping
+        # stage writes to GeoTIFF first and the final step uses CreateCopy().
+        result = driver.CreateCopy(
+            str(output_png),
+            source,
+            strict=0,
+            options=[],
+            callback=progress,
+        )
+        if result is None:
+            raise RuntimeError("The PNG driver did not create the final image.")
+        result.FlushCache()
+    finally:
+        progress.finish()
+        result = None
+        source = None
+
+
+def make_working_directory(output: Path, keep: bool) -> tuple[Any, Path]:
+    if not keep:
+        temporary = tempfile.TemporaryDirectory(prefix=f"{output.stem}-gdal-api-")
+        return temporary, Path(temporary.name)
+
+    work_dir = output.parent / f"{output.stem}-intermediate"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    class RetainedDirectory:
+        def __enter__(self) -> str:
+            return str(work_dir)
+
+        def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+            return False
+
+    return RetainedDirectory(), work_dir
+
+
+def print_plan(args: argparse.Namespace, output: Path) -> None:
+    resolution_us_ft = args.meters_per_pixel * US_SURVEY_FEET_PER_METER
+
+    print("Processing plan:")
+    print(f"  Input VRT: {args.vrt}")
+    print(
+        f"  Window: west={args.west}, north={args.north}, "
+        f"east={args.east}, south={args.south} ({args.projwin_srs})"
+    )
+    print(
+        f"  Resolution: {args.meters_per_pixel:g} metre(s)/pixel "
+        f"({resolution_us_ft:.15g} ftUS/pixel in EPSG:6597)"
+    )
+    print(
+        f"  Pixel alignment: multiples of {args.tile_size}; "
+        "expand east and south only"
+    )
+    print(f"  Stretch exponent: {args.exponent:g}")
+    if args.scale_min is not None:
+        print(
+            f"  Stretch range: explicit {args.scale_min:g} through "
+            f"{args.scale_max:g}"
+        )
+    else:
+        print(f"  Stretch statistics scope: {args.stretch_scope}")
+    print(f"  Water value preserved: {args.water_value}")
+    print(
+        f"  Non-water values through {args.land_start} become: "
+        f"{args.clip_level}"
+    )
+    print(f"  Final output: {output}")
+    print("  Execution: in-process osgeo.gdal + NumPy; no subprocesses")
+
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        validate_args(args)
+
+        output = Path(args.output).resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        print_plan(args, output)
+
+        if args.dry_run:
+            return 0
+
+        gdal, np, osr = load_dependencies()
+
+        if args.overwrite:
+            remove_dataset_files(output)
+
+        context, work_dir = make_working_directory(
+            output, args.keep_intermediates
+        )
+
+        with context:
+            one_metre_tif = work_dir / f"{output.stem}-1m.tif"
+            stretched_png = work_dir / f"{output.stem}-stretched.png"
+            clipped_tif = work_dir / f"{output.stem}-clipped.tif"
+
+            for intermediate in (one_metre_tif, stretched_png, clipped_tif):
+                remove_dataset_files(intermediate)
+
+            requested_width, requested_height, width, height = crop_and_resample(
+                gdal=gdal,
+                source_vrt=args.vrt,
+                output_tif=one_metre_tif,
+                west=args.west,
+                north=args.north,
+                east=args.east,
+                south=args.south,
+                projwin_srs=args.projwin_srs,
+                metres_per_pixel=args.meters_per_pixel,
+                tile_size=args.tile_size,
+            )
+
+            map_bounds = read_map_bounds(
+                gdal=gdal,
+                osr=osr,
+                raster_path=one_metre_tif,
+            )
+
+            if args.scale_min is not None:
+                minimum = float(args.scale_min)
+                maximum = float(args.scale_max)
+                print(
+                    "\nUsing the explicit stretch range: "
+                    f"{minimum:g} through {maximum:g}"
+                )
+            else:
+                if args.stretch_scope == "requested":
+                    statistics_width = requested_width
+                    statistics_height = requested_height
+                    statistics_label = "the original requested window"
+                else:
+                    statistics_width = width
+                    statistics_height = height
+                    statistics_label = "the full 512-aligned raster"
+
+                minimum, maximum = compute_stretch_range(
+                    gdal=gdal,
+                    np=np,
+                    source_tif=one_metre_tif,
+                    width=statistics_width,
+                    height=statistics_height,
+                    chunk_rows=args.chunk_rows,
+                    label=statistics_label,
+                )
+
+            stretch_to_byte_png(
+                gdal=gdal,
+                source_tif=one_metre_tif,
+                output_png=stretched_png,
+                exponent=args.exponent,
+                minimum=minimum,
+                maximum=maximum,
+            )
+
+            apply_land_floor(
+                gdal=gdal,
+                np=np,
+                source_png=stretched_png,
+                output_tif=clipped_tif,
+                clip_level=args.clip_level,
+                land_start=args.land_start,
+                water_value=args.water_value,
+                chunk_rows=args.chunk_rows,
+            )
+
+            create_final_png(
+                gdal=gdal,
+                source_tif=clipped_tif,
+                output_png=output,
+            )
+
+            print("\nCompleted:")
+            print(
+                f"  Requested crop size: {requested_width} x {requested_height}"
+            )
+            print(f"  Final aligned size:  {width} x {height}")
+            print(f"  Source elevation range: {minimum:g} through {maximum:g}")
+            print(f"  Output: {output}")
+            if args.keep_intermediates:
+                print(f"  Intermediate files: {work_dir}")
+
+            print_map_bounds(map_bounds)
+
+        return 0
+
+    except (
+        ValueError,
+        FileNotFoundError,
+        FileExistsError,
+        RuntimeError,
+        OSError,
+    ) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
