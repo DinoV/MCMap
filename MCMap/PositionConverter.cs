@@ -65,6 +65,14 @@ namespace MinecraftMapper {
                 CropTopPixels * PixelHeightUsFt;
         }
 
+        public static PositionConverter FromProjectedRasterOrigin(int maxX, int maxZ, double upperLeftEastingUsFt, double upperLeftNorthingUsFt, int offsetX, int offsetZ) {
+            return new PositionConverter(
+                maxX, maxZ,
+                upperLeftEastingUsFt, upperLeftNorthingUsFt,
+                offsetX, offsetZ
+            );
+        }
+
         public static PositionConverter FromLatLong(int maxX, int maxZ, double lat, double lng, int offsetX, int offsetZ) {
             var projected =
                 ProjectToWashingtonNorth(lat, lng);
@@ -108,11 +116,7 @@ namespace MinecraftMapper {
                 Math.Max(northWest.NorthingUsFt, northEast.NorthingUsFt),
                 Math.Max(southWest.NorthingUsFt, southEast.NorthingUsFt));
 
-            return new PositionConverter(
-                maxX, maxZ,
-                upperLeftEastingUsFt, upperLeftNorthingUsFt,
-                offsetX, offsetZ
-            );
+            return FromProjectedRasterOrigin(maxX, maxZ, upperLeftEastingUsFt, upperLeftNorthingUsFt, offsetX, offsetZ);
         }
 
         /*

@@ -17,8 +17,9 @@ namespace MinecraftMapper {
         private readonly StreamWriter _log;
         private readonly bool _dryRun = false;
 
-        public Mapper(string log, string world, string osmXml, double north, double west,
-                double? east, double? south, int mcX, int mcZ,
+        public Mapper(string log, string world, string osmXml,
+                double upperLeftEastingUsFt, double upperLeftNorthingUsFt,
+                int mcX, int mcZ,
                 long[] buildings, long[] roads) {
             _world = NbtWorld.Open(world);
             _buildings = buildings;
@@ -68,17 +69,9 @@ namespace MinecraftMapper {
             int worldMaxX = (maxChunkX + 1) << _bm.ChunkXLog;
             int worldMaxZ = (maxChunkZ + 1) << _bm.ChunkZLog;
 
-#if FALSE
-            // Creates duwamish map
-            _conv = new PositionConverter(worldMaxX, worldMaxZ);
-#else
-            _conv = east.HasValue && south.HasValue
-                ? PositionConverter.FromLatLongBounds(
-                    worldMaxX, worldMaxZ, west, north,
-                    east.Value, south.Value, mcX, mcZ)
-                : PositionConverter.FromLatLong(
-                    worldMaxX, worldMaxZ, north, west, mcX, mcZ);
-#endif
+            _conv = PositionConverter.FromProjectedRasterOrigin(
+                    worldMaxX, worldMaxZ, upperLeftEastingUsFt, upperLeftNorthingUsFt,
+                    mcX, mcZ);
             _reader = new OsmReader(osmXml);
             /*
             HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
@@ -133,9 +126,8 @@ namespace MinecraftMapper {
             Console.WriteLine(msg, args);
         }
 
-        private static void SetMappedBlock (
-            BlockManager blocks, int x, int y, int z, int id, int data)
-        {
+        private static void SetMappedBlock(
+            BlockManager blocks, int x, int y, int z, int id, int data) {
             string name;
             Substrate.Nbt.TagNodeCompound properties;
             BlockInfo.GetModernBlockState(
@@ -304,13 +296,13 @@ namespace MinecraftMapper {
                                 open: false,
                                 powered: false,
                                 inWall: false);
-                        }                        
+                        }
 
                         prev = point.Block;
                         first = false;
                     }
                     start = landUse.Nodes[i];
-                }                
+                }
             }
         }
 
@@ -337,9 +329,9 @@ namespace MinecraftMapper {
                     if (!_conv.IsValidPoint(point.Block)) {
                         continue;
                     }
-               
+
                     int height = baseHeights[point.Block] = GetHeight(point.Block);
-                    
+
                     SetMappedBlock(_bm, point.Block.X, height, point.Block.Z, blockType, blockData);
                 }
 
@@ -455,8 +447,7 @@ namespace MinecraftMapper {
             List<long> buildings = new List<long>();
             List<long> roads = new List<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
-            double north = 47.6943276, west = -122.3727171;
-            double? east = null, south = null;
+            double? upperLeftEastingUsFt = null, upperLeftNorthingUsFt = null;
             int mcX = 0, mcZ = 0;
             foreach (var arg in args) {
                 if (arg == "/?" || arg == "/help") {
@@ -482,22 +473,17 @@ namespace MinecraftMapper {
                         return 1;
                     }
                     roads.Add(road);
-                } else if (arg.StartsWith("/bounds:")) {
-                    var coords = arg.Substring("/bounds:".Length).Split(',');
-                    double parsedWest, parsedNorth, parsedEast, parsedSouth;
-                    if (coords.Length != 4 ||
+                } else if (arg.StartsWith("/pos:")) {
+                    var coords = arg.Substring("/pos:".Length).Split(',');
+                    double parsedNorth, parsedWest;
+                    if (coords.Length != 2 ||
                         !double.TryParse(coords[0], out parsedWest) ||
-                        !double.TryParse(coords[1], out parsedNorth) ||
-                        !double.TryParse(coords[2], out parsedEast) ||
-                        !double.TryParse(coords[3], out parsedSouth) ||
-                        parsedWest >= parsedEast || parsedSouth >= parsedNorth) {
-                        Console.WriteLine("Expected /bounds:<west>,<north>,<east>,<south>");
+                        !double.TryParse(coords[1], out parsedNorth)) {
+                        Console.WriteLine("Expected /pos:<west>,<north>");
                         return 1;
                     }
-                    west = parsedWest;
-                    north = parsedNorth;
-                    east = parsedEast;
-                    south = parsedSouth;
+                    upperLeftEastingUsFt = parsedWest;
+                    upperLeftNorthingUsFt = parsedNorth;
                 } else if (arg.StartsWith("/offset:")) {
                     var coords = arg.Substring("/offset:".Length).Split(',');
                     if (coords.Length != 2 ||
@@ -516,7 +502,11 @@ namespace MinecraftMapper {
             var world = NbtWorld.Open(map);
             Console.WriteLine(world);
 
-            var mapper = new Mapper(log, map, osmData, north, west, east, south,
+            if (!upperLeftNorthingUsFt.HasValue || !upperLeftNorthingUsFt.HasValue) {
+                Console.WriteLine("Bounds need to be provided");
+                return 1;
+            }
+            var mapper = new Mapper(log, map, osmData, upperLeftEastingUsFt.Value, upperLeftNorthingUsFt.Value,
                 mcX, mcZ, buildings.ToArray(), roads.ToArray());
             mapper.MapIt();
             return 0;
@@ -527,7 +517,7 @@ namespace MinecraftMapper {
             Console.WriteLine(" /help                         - This help");
             Console.WriteLine(" /map:<map>                    - Specifies path to Minecraft Java Edition save directory");
             Console.WriteLine(" /osm:<osm.xml>                - Specifies path to Open Street Map .xml file");
-            Console.WriteLine(" /bounds:<west>,<north>,<east>,<south> - Specifies the same geographic crop passed to lidar.py");
+            Console.WriteLine(" /pos:<west>,<north>           - Specifies the projected bounds (west, north) outputted from lidar.py");
             Console.WriteLine(" /offset:X,Z                   - Provides an extra offset in Minecraft blocks that's applied from the lat,long");
             Console.WriteLine(" /building:<osmWay>            - Limit buildings to be drawn, multiple can be specified");
             Console.WriteLine(" /road:<osmWay>                - Limit roads to be drawn, multiple can be specified");
@@ -559,8 +549,7 @@ namespace MinecraftMapper {
             North
         }
 
-        private static BlockFacing ToBlockFacing (FullDirection direction)
-        {
+        private static BlockFacing ToBlockFacing(FullDirection direction) {
             switch (direction) {
                 case FullDirection.East: return BlockFacing.East;
                 case FullDirection.West: return BlockFacing.West;
@@ -570,8 +559,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private static BlockFacing ToBlockFacing (DoorDirection direction)
-        {
+        private static BlockFacing ToBlockFacing(DoorDirection direction) {
             switch (direction) {
                 case DoorDirection.East: return BlockFacing.East;
                 case DoorDirection.South: return BlockFacing.South;
@@ -581,8 +569,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private static BlockFacing WallFacingFromLegacyData (int data)
-        {
+        private static BlockFacing WallFacingFromLegacyData(int data) {
             switch (data) {
                 case 2: return BlockFacing.North;
                 case 3: return BlockFacing.South;
@@ -822,7 +809,7 @@ namespace MinecraftMapper {
                         int height;
                         if (buildingPoints == null || !buildingPoints.TryGetValue(point.Block, out height)) {
                             height = GetHeight(point.Block);
-                        } 
+                        }
                         groundMaxHeight = Math.Max(groundMaxHeight, height);
                     }
                 }
@@ -857,7 +844,7 @@ namespace MinecraftMapper {
                         if (height + j > 240) {
                             break;
                         }
-                        
+
                         SetMappedBlock(_bm, point.Block.X, height + j, point.Block.Z, (int)blockType, data);
                     }
                 }
@@ -950,7 +937,7 @@ namespace MinecraftMapper {
                 }
 
                 var points = PlotLine(from.X, from.Z, to.X, to.Z).ToArray();
-                for(int curPoint = 0; curPoint < points.Length; curPoint++ ) {
+                for (int curPoint = 0; curPoint < points.Length; curPoint++) {
                     var point = points[curPoint];
                     if (!_conv.IsValidPoint(point.Block) || !baseHeights.ContainsKey(point.Block)) {
                         continue;
@@ -1012,14 +999,14 @@ namespace MinecraftMapper {
 
         private static void GetBuildingColor(OsmReader.Building building, int color, out int blockType, out int data) {
             blockType = BlockType.STAINED_CLAY;
-            
+
             switch (building.Material) {
                 case OsmReader.Material.Stone:
                     blockType = BlockType.STONE; data = (int)StoneType.STONE; return;
                 case OsmReader.Material.Wood: blockType = BlockType.WOOD; data = (int)WoodType.OAK; return;
                 case OsmReader.Material.Brick: blockType = BlockType.BRICK_BLOCK; data = 0; return;
                 case OsmReader.Material.Concrete: blockType = BlockType.CONCRETE; data = 0; return;
-                case OsmReader.Material.Sandstone: blockType = BlockType.SANDSTONE; data = 0;return;
+                case OsmReader.Material.Sandstone: blockType = BlockType.SANDSTONE; data = 0; return;
                 case OsmReader.Material.Slate: blockType = BlockType.STONE; data = (int)StoneType.POLISHED_GRANITE; return;
                 case OsmReader.Material.Asphalt: blockType = BlockType.CONCRETE; data = 15; return; // black concrete
             }
@@ -1223,7 +1210,7 @@ namespace MinecraftMapper {
             DrawSign(signLoc, direction, BlockType.SIGN_POST, null, text);
         }
 
-        private void DrawSign(BlockPosition signLoc, Direction direction, int signType = BlockType.SIGN_POST, int ? height = null, params string[] text) {
+        private void DrawSign(BlockPosition signLoc, Direction direction, int signType = BlockType.SIGN_POST, int? height = null, params string[] text) {
             if (!_conv.IsValidPoint(signLoc)) {
                 return;
             }
@@ -1237,7 +1224,7 @@ namespace MinecraftMapper {
             if (height == null) {
                 height = GetHeight(signLoc) + 1;
             }
-            
+
             _bm.SetBlock(
                 signLoc.X, height.Value, signLoc.Z, AcquaticBlocks.OakSign,
                 rotation: (int)direction);
@@ -1318,10 +1305,10 @@ namespace MinecraftMapper {
                 }
 
                 // And walk that point back into the closest building point
-                while (!baseHeights.ContainsKey(targetPoint) && 
-                    targetPoint.X >= left - 1 && 
-                    targetPoint.X <= right + 1 && 
-                    targetPoint.Z >= top - 1 && 
+                while (!baseHeights.ContainsKey(targetPoint) &&
+                    targetPoint.X >= left - 1 &&
+                    targetPoint.X <= right + 1 &&
+                    targetPoint.Z >= top - 1 &&
                     targetPoint.Z <= bottom - 1) {
                     targetPoint = new BlockPosition(targetPoint.X - adjX, targetPoint.Z - adjZ);
                 }
@@ -1397,7 +1384,7 @@ namespace MinecraftMapper {
 
         private static ColorMapping[] ColorMappings = new[] {
             new ColorMapping(
-                new OsmReader.Color(0x80, 0x80, 0x80), 
+                new OsmReader.Color(0x80, 0x80, 0x80),
                 BlockType.COBBLESTONE,
                 BlockType.COBBLESTONE_STAIRS
             ),
@@ -1550,7 +1537,7 @@ namespace MinecraftMapper {
                 case OsmReader.RoofType.Flat:
                     DrawFlatRoof(top, left, bottom, right, buildingPositions, roofPoints, roofStart, roofMapping, floorPoints);
                     break;
-                case OsmReader.RoofType.Hipped: 
+                case OsmReader.RoofType.Hipped:
                     DrawHippedRoof(top, left, bottom, right, buildingPositions, roofPoints, dataType, roofStart, stairType, baseType);
                     break;
                 case OsmReader.RoofType.Gabled:
@@ -1749,7 +1736,7 @@ namespace MinecraftMapper {
 
                 for (int x = lStart; x <= rStart; x++) {
                     var point = new BlockPosition(x, z);
-                    if (roofPoints.Contains(point) || 
+                    if (roofPoints.Contains(point) ||
                         (!buildingPositions.ContainsKey(point) && !floorPoints.Contains(point))) {
                         continue;
                     }
@@ -1803,7 +1790,7 @@ namespace MinecraftMapper {
                 } else if (baseHeights[door] > avgHeight) {
                 }
             }
-            
+
             foreach (var point in floorPoints) {
                 var height = GetHeight(point);
 
@@ -1878,7 +1865,7 @@ namespace MinecraftMapper {
                 for (int width = 0; width < StairsWidth; width++) {
                     switch (stair.Dir) {
                         case FullDirection.West: pos = new BlockPosition(stair.X + StepCountPerFloor - 1 - step, stair.Z + width); break;
-                        case FullDirection.North: pos = new BlockPosition(stair.X + width, stair.Z + StepCountPerFloor - 1- step); break;
+                        case FullDirection.North: pos = new BlockPosition(stair.X + width, stair.Z + StepCountPerFloor - 1 - step); break;
                         case FullDirection.East: pos = new BlockPosition(stair.X + step, stair.Z + width); break;
                         case FullDirection.South: pos = new BlockPosition(stair.X + width, stair.Z + step); break;
                         default:
@@ -1927,7 +1914,7 @@ namespace MinecraftMapper {
                             } else {
                                 pos = new BlockPosition(x + width, z + step);
                             }
-                            
+
                             if (!floorPoints.Contains(pos) || stairPoints.Contains(pos)) {
                                 ok = false;
                                 break;
@@ -2104,7 +2091,7 @@ namespace MinecraftMapper {
             int allHeights = 0;
             while (points.Count != 0) {
                 var next = points.Dequeue();
-                
+
                 var height = GetHeight(next);
                 allHeights += height;
                 maxHeight = Math.Max(height, maxHeight);
@@ -3255,7 +3242,7 @@ namespace MinecraftMapper {
                                 direction = AlignTrafficLightDirection(direction, dir2);
                             }
                             // TODO: Track directions here and add arrows if we have multiple signs...
-                            if (!names.Contains(otherSegment.Way.Name)) { 
+                            if (!names.Contains(otherSegment.Way.Name)) {
                                 names.Add(otherSegment.Way.Name);
                             }
                         }
@@ -3479,7 +3466,7 @@ namespace MinecraftMapper {
         private void DrawRoadSign(OsmReader.SignType signType, List<string> name, Dictionary<BlockPosition, RoadPoint> roadPoints, BlockPosition intersection, int angle, OsmReader.Way way) {
             Direction direction = AngleToDirection(angle);
 
-            var target =  GetSignNonRoadPoint(roadPoints, intersection, angle, direction);
+            var target = GetSignNonRoadPoint(roadPoints, intersection, angle, direction);
             if (target == null) {
                 return;
             }
@@ -3918,7 +3905,7 @@ namespace MinecraftMapper {
                         building.Stories = stories;
                     }
                 }
-                
+
                 address.Clear();
             }
         }
