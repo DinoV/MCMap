@@ -1,0 +1,233 @@
+using CsvHelper;
+using Substrate;
+using Substrate.TileEntities;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using static MinecraftMapper.OsmReader;
+
+namespace MinecraftMapper {
+    partial class Mapper {
+        private readonly NbtWorld _world;
+        private readonly PositionConverter _conv;
+        private readonly OsmReader _reader;
+        private readonly AnvilBlockManager _bm;
+        private readonly long[] _buildings, _roads;
+        private readonly StreamWriter _log;
+        private readonly bool _dryRun = false;
+
+        public Mapper(string log, string world, string osmXml,
+                double upperLeftEastingUsFt, double upperLeftNorthingUsFt,
+                int mcX, int mcZ,
+                long[] buildings, long[] roads) {
+            _world = NbtWorld.Open(world);
+            _buildings = buildings;
+            _roads = roads;
+            _bm = _world.GetBlockManager() as AnvilBlockManager;
+            _bm.AutoLight = true;
+            if (log != null) {
+                _log = new StreamWriter(new FileStream(log, FileMode.Create, FileAccess.ReadWrite));
+            }
+            var region = ((AnvilWorld)_world).GetRegionManager().GetRegionPath();
+
+            int maxChunkX = Int32.MinValue, maxChunkZ = Int32.MinValue;
+            int minChunkX = Int32.MaxValue, minChunkZ = Int32.MaxValue;
+            foreach (var file in Directory.GetFiles(region)) {
+                var filenameInfo = Path.GetFileName(file).Split('.');
+                int regionX = 0, regionZ = 0;
+                if (filenameInfo.Length == 4 &&
+                    filenameInfo[0] == "r" &&
+                    int.TryParse(filenameInfo[1], out regionX) &&
+                    int.TryParse(filenameInfo[2], out regionZ) &&
+                    filenameInfo[3] == "mca") {
+                    using (var regionFile = new Substrate.Core.RegionFile(file)) {
+                        for (int localZ = 0; localZ < 32; localZ++) {
+                            for (int localX = 0; localX < 32; localX++) {
+                                if (!regionFile.HasChunk(localX, localZ)) {
+                                    continue;
+                                }
+
+                                int chunkX = (regionX << RegionChunkManager.REGION_XLOG) + localX;
+                                int chunkZ = (regionZ << RegionChunkManager.REGION_ZLOG) + localZ;
+                                maxChunkX = Math.Max(chunkX, maxChunkX);
+                                maxChunkZ = Math.Max(chunkZ, maxChunkZ);
+                                minChunkX = Math.Min(chunkX, minChunkX);
+                                minChunkZ = Math.Min(chunkZ, minChunkZ);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (minChunkX == Int32.MaxValue) {
+                throw new InvalidDataException("The world contains no populated chunks.");
+            }
+
+            int worldX = minChunkX << _bm.ChunkXLog;
+            int worldZ = minChunkZ << _bm.ChunkZLog;
+            int worldMaxX = (maxChunkX + 1) << _bm.ChunkXLog;
+            int worldMaxZ = (maxChunkZ + 1) << _bm.ChunkZLog;
+
+            _conv = PositionConverter.FromProjectedRasterOrigin(
+                    worldMaxX, worldMaxZ, upperLeftEastingUsFt, upperLeftNorthingUsFt,
+                    mcX, mcZ);
+            _reader = new OsmReader(osmXml);
+            /*
+            HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
+            DrawBuilding(
+                new OsmReader.Building("Test", "1234", "main St", OsmReader.Amenity.None, OsmReader.Material.None,
+                new OsmReader.RoofInfo(OsmReader.RoofType.Gabled, null, null, null, null, false),
+                new OsmReader.Node[] {
+                    new OsmReader.Node(47.6922268, -122.3524505),
+                    new OsmReader.Node(47.6922699, -122.3524514),
+                    new OsmReader.Node(47.6922701, -122.3524313),
+                    new OsmReader.Node(47.6923199, -122.3524323),
+                    new OsmReader.Node(47.6923204, -122.3523824),
+                    new OsmReader.Node(47.6923272, -122.3523825),
+                    new OsmReader.Node(47.6923275, -122.3523532),
+                    new OsmReader.Node(47.6923192, -122.3523531),
+                    new OsmReader.Node(47.6923196, -122.3523109),
+                    new OsmReader.Node(47.6922282, -122.3523090),
+                    new OsmReader.Node(47.6922268, -122.3524505),
+
+                }),
+                buildingPoints,
+                1
+            );
+            _world.Save();*/
+        }
+
+        private void WriteLine(object msg) {
+            if (_log != null) {
+                _log.WriteLine(msg);
+            }
+            Console.WriteLine(msg);
+        }
+
+        private void WriteLine(string msg, object arg) {
+            if (_log != null) {
+                _log.WriteLine(msg, arg);
+            }
+            Console.WriteLine(msg, arg);
+        }
+
+        private void WriteLine(string msg, object arg0, object arg1) {
+            if (_log != null) {
+                _log.WriteLine(msg, arg0, arg1);
+            }
+            Console.WriteLine(msg, arg0, arg1);
+        }
+
+        private void WriteLine(string msg, params object[] args) {
+            if (_log != null) {
+                _log.WriteLine(msg, args);
+            }
+            Console.WriteLine(msg, args);
+        }
+
+        private static void SetMappedBlock(
+            BlockManager blocks, int x, int y, int z, int id, int data) {
+            string name;
+            Substrate.Nbt.TagNodeCompound properties;
+            BlockInfo.GetModernBlockState(
+                id, data, out name, out properties);
+            blocks.SetBlock(x, y, z, name, properties);
+        }
+
+        public void MapIt() {
+            //Save();
+            DateTime startTime = DateTime.Now;
+            _reader.ReadData();
+            GC.Collect();
+            DateTime dataProcessing = DateTime.Now;
+            var residential = new CsvReader(new StreamReader("residential.csv"));
+            ReadStories(residential, "Stories");
+            var commercial = new CsvReader(new StreamReader("commercial.csv"));
+            ReadStories(commercial, "NbrStories");
+            _reader.BuildingsByAddress.Clear();
+            try {
+                WriteLine("{0} roads", _reader.Ways.Count);
+
+                if (_roads.Length == 0) {
+                    DrawCoastlines();
+
+                    DrawLandUses();
+
+                    DrawLeisures();
+
+                    DrawParkingLots();
+                }
+
+                var roadPoints = DrawRoads();
+
+                DrawRails();
+
+                DrawStreetLamps(roadPoints);
+                var buildingPoints = DrawBuildings();
+
+                Save();
+
+                DrawBarriers(buildingPoints);
+
+                foreach (var node in _reader.Amenities) {
+                    var point = _conv.ToBlock(node.Lat, node.Long);
+                    _bm.SetBlock(
+                        point.X,
+                        _bm.GetHeight(point.X, point.Z) + 1,
+                        point.Z,
+                        AcquaticBlocks.NetherBrickFence,
+                        north: false, east: false, south: false, west: false
+                    );
+                    _bm.SetBlock(
+                        point.X + 1,
+                        _bm.GetHeight(point.X + 1, point.Z) + 1,
+                        point.Z,
+                        AcquaticBlocks.NetherBrickFence,
+                        north: false, east: false, south: false, west: false
+                    );
+                    _bm.SetBlock(
+                        point.X + 2,
+                        _bm.GetHeight(point.X + 2, point.Z) + 1,
+                        point.Z,
+                        AcquaticBlocks.NetherBrickFence,
+                        north: false, east: false, south: false, west: false
+                    );
+                }
+                Save();
+            } catch (Exception e) {
+                Save();
+                WriteLine(e);
+            }
+            DateTime done = DateTime.Now;
+            WriteLine("All done, data processing {0}, total {1}", dataProcessing - startTime, done - startTime);
+            Console.ReadLine();
+        }
+
+        private void Save() {
+            if (!_dryRun) {
+                _world.Save();
+            }
+        }
+
+        private int GetHeight(int x, int z) {
+            return GetHeight(new BlockPosition(x, z));
+        }
+
+        private int GetHeight(BlockPosition signLoc) {
+            var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
+            if (groundHeight == 0) {
+                return 0;
+            }
+            var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
+            while (b.ID == BlockType.AIR) {
+                // GetHeight doesn't always work so well :P
+                groundHeight--;
+                b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
+            }
+
+            return groundHeight;
+        }
+
+    }
+}

@@ -1,0 +1,265 @@
+using CsvHelper;
+using Substrate;
+using Substrate.TileEntities;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using static MinecraftMapper.OsmReader;
+
+namespace MinecraftMapper {
+    partial class Mapper {
+        private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
+            int cur = 0;
+            foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
+                if ((++cur % 100) == 0) {
+                    SaveBlocks();
+                }
+
+                if (sign.Value.Type == OsmReader.SignType.StreetLamp) {
+                    var pos = _conv.ToBlock(sign.Key.Lat, sign.Key.Long);
+                    Direction? dir = null;
+                    if (sign.Value.Direction != null) {
+                        switch (sign.Value.Direction) {
+                            case 0: dir = Direction.North; break;
+                            case 90: dir = Direction.East; break;
+                            case 180: dir = Direction.South; break;
+                            case 270: dir = Direction.West; break;
+                        }
+                    }
+                    if (dir == null) {
+                        dir = Direction.East;
+                        for (int i = 0; i < 10; i++) {
+                            if (roadPoints.ContainsKey(new BlockPosition(pos.X - 1, pos.Z))) {
+                                dir = Direction.East;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X + 1, pos.Z))) {
+                                dir = Direction.West;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z - 1))) {
+                                dir = Direction.South;
+                            } else if (roadPoints.ContainsKey(new BlockPosition(pos.X, pos.Z + 1))) {
+                                dir = Direction.North;
+                            }
+                        }
+                    }
+                    WriteLine("Lamp at {0} facing {1}", pos, dir);
+                    DrawStreetLamp(dir.Value, pos);
+                }
+            }
+        }
+
+        private void DrawBarriers(Dictionary<BlockPosition, int> buildingPositions) {
+            int cur = 0;
+            foreach (var barrier in _reader.Barriers.OrderBy(x => MapOrder(_conv, x.Nodes.First()))) {
+                if ((++cur % 100) == 0) {
+                    SaveBlocks();
+                }
+                int blockKind = 0, height = 1;
+                switch (barrier.Kind) {
+                    case OsmReader.BarrierKind.Fence: blockKind = BlockType.FENCE; break;
+                    case OsmReader.BarrierKind.Gate: blockKind = BlockType.FENCE_GATE; break;
+                    case OsmReader.BarrierKind.GuardRail: blockKind = BlockType.NETHER_BRICK_FENCE; break;
+                    case OsmReader.BarrierKind.Hedge: blockKind = BlockType.LEAVES; height = 2; break;
+                    case OsmReader.BarrierKind.RetainingWall: blockKind = BlockType.STONE_BRICK; height = 2; break;
+                    case OsmReader.BarrierKind.Wall:
+                        switch (barrier.Wall) {
+                            case OsmReader.Wall.Brick:
+                                blockKind = BlockType.BRICK_BLOCK; break;
+                            default:
+                                blockKind = BlockType.STONE;
+                                break;
+                        }
+                        height = 4;
+                        break;
+                }
+
+                var start = barrier.Nodes[0];
+                HashSet<BlockPosition> wallPoints = new HashSet<BlockPosition>();
+                for (int i = 1; i < barrier.Nodes.Length; i++) {
+                    var from = _conv.ToBlock(start.Lat, start.Long);
+                    WriteLine("Barrier {0} {1}", from, barrier.Kind);
+                    var to = _conv.ToBlock(barrier.Nodes[i].Lat, barrier.Nodes[i].Long);
+
+                    foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z)) {
+                        if (buildingPositions.ContainsKey(point.Block) ||
+                            wallPoints.Contains(point.Block)) {
+                            continue;
+                        }
+                        wallPoints.Add(point.Block);
+
+                        var curHeight = _bm.GetHeight(point.Block.X, point.Block.Z);
+                        for (int y = 0; y < height; y++) {
+                            SetMappedBlock(_bm, point.Block.X, curHeight + y, point.Block.Z, blockKind, 0);
+                        }
+                    }
+
+                    start = barrier.Nodes[i];
+                }
+            }
+        }
+
+        private void DrawStreetLamp(Direction direction, BlockPosition center) {
+            var height = GetHeight(center.X, center.Z);
+            const int LampHeight = 8, Length = 3;
+            for (int i = 0; i < LampHeight; i++) {
+                _bm.SetBlock(center.X, height + i, center.Z, AcquaticBlocks.CobblestoneWall, north: false, east: false, south: false, west: false, up: false);
+            }
+
+            for (int i = 0; i < Length; i++) {
+                int x = center.X, z = center.Z;
+                switch (direction) {
+                    case Direction.East: x += i; break;
+                    case Direction.West: x -= i; break;
+                    case Direction.North: z -= i; break;
+                    case Direction.South: z += i; break;
+                }
+
+                _bm.SetBlock(x, height + LampHeight, z, AcquaticBlocks.StoneSlab, type: BlockSlabType.Bottom, waterlogged: false);
+                if (i == Length - 1) {
+                    _bm.SetBlock(x, height + LampHeight - 1, z, AcquaticBlocks.SeaLantern);
+                }
+            }
+        }
+
+
+        private void DrawBusStop(Direction direction, BlockPosition center) {
+            if (center.X < 5 || center.Z < 5) {
+                return;
+            }
+            int height;
+            if (!TryPrepareBusStopFootprint(direction, center, out height)) {
+                return;
+            }
+            // draw sides
+            if (direction == Direction.South || direction == Direction.North) {
+                // draw sides
+                for (int z = 0; z < 3; z++) {
+                    var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
+                    for (int y = 0; y < 3; y++) {
+                        if (y == 0) {
+                            _bm.SetBlock(center.X - 2, height + y, zLoc, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                            _bm.SetBlock(center.X + 2, height + y, zLoc, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                        } else {
+                            _bm.SetBlock(center.X - 2, height + y, zLoc, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                            _bm.SetBlock(center.X + 2, height + y, zLoc, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                        }
+                    }
+                    // draw top
+                    for (int x = -2; x <= 2; x++) {
+                        _bm.SetBlock(center.X + x, height + 3, zLoc, AcquaticBlocks.AcaciaSlab,
+                            type: BlockSlabType.Bottom, waterlogged: false);
+                    }
+                }
+                // draw back
+                for (int x = -2; x < 2; x++) {
+                    for (int y = 0; y < 3; y++) {
+                        if (y == 0) {
+                            _bm.SetBlock(center.X + x, height + y, center.Z, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                        } else {
+                            _bm.SetBlock(center.X + x, height + y, center.Z, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                        }
+                    }
+                }
+            } else {
+                // draw sides
+                for (int x = 0; x < 3; x++) {
+                    var xLoc = direction == Direction.West ? center.X - x : center.X + x;
+                    for (int y = 0; y < 3; y++) {
+                        if (y == 0) {
+                            _bm.SetBlock(xLoc, height + y, center.Z - 2, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                            _bm.SetBlock(xLoc, height + y, center.Z + 2, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                        } else {
+                            _bm.SetBlock(xLoc, height + y, center.Z - 2, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                            _bm.SetBlock(xLoc, height + y, center.Z + 2, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                        }
+                    }
+                    // draw top
+                    for (int z = -2; z <= 2; z++) {
+                        _bm.SetBlock(xLoc, height + 3, center.Z + z, AcquaticBlocks.AcaciaSlab,
+                            type: BlockSlabType.Bottom, waterlogged: false);
+                    }
+                }
+                // draw back
+                for (int z = -2; z < 2; z++) {
+                    for (int y = 0; y < 3; y++) {
+                        if (y == 0) {
+                            _bm.SetBlock(center.X, height + y, center.Z + z, AcquaticBlocks.BlueStainedGlassPane,
+                                north: false, east: false, south: false, west: false);
+                        } else {
+                            _bm.SetBlock(center.X, height + y, center.Z + z, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
+                        }
+                    }
+                }
+            }
+        }
+
+        private bool TryPrepareBusStopFootprint(Direction direction,
+                BlockPosition center, out int shelterBaseHeight) {
+            var footprint = new List<BlockPosition>();
+            if (direction == Direction.South || direction == Direction.North) {
+                for (int z = 0; z < 3; z++) {
+                    int zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
+                    for (int x = -2; x <= 2; x++) {
+                        footprint.Add(new BlockPosition(center.X + x, zLoc));
+                    }
+                }
+            } else {
+                for (int x = 0; x < 3; x++) {
+                    int xLoc = direction == Direction.West ? center.X - x : center.X + x;
+                    for (int z = -2; z <= 2; z++) {
+                        footprint.Add(new BlockPosition(xLoc, center.Z + z));
+                    }
+                }
+            }
+
+            if (footprint.Any(point => !_conv.IsValidPoint(point))) {
+                shelterBaseHeight = 0;
+                return false;
+            }
+
+            var groundHeights = footprint.ToDictionary(
+                point => point,
+                point => GetTerrainHeight(point));
+            int maxGroundHeight = groundHeights.Values.Max();
+
+            foreach (var point in footprint) {
+                int groundHeight = groundHeights[point];
+                ClearNonSolidBlocks(point, groundHeight + 1, maxGroundHeight + 4);
+                for (int y = groundHeight + 1; y <= maxGroundHeight; y++) {
+                    _bm.SetBlock(point.X, y, point.Z,
+                        AcquaticBlocks.GrassBlock, snowy: false);
+                }
+            }
+
+            shelterBaseHeight = maxGroundHeight + 1;
+            return true;
+        }
+
+        private int GetTerrainHeight(BlockPosition point) {
+            int height = GetHeight(point);
+            while (height > 0) {
+                int id = _bm.GetID(point.X, height, point.Z);
+                if (BlockInfo.BlockTable[id].State != BlockState.NONSOLID) {
+                    break;
+                }
+                height--;
+            }
+            return height;
+        }
+
+        private void ClearNonSolidBlocks(BlockPosition point, int firstY, int lastY) {
+            for (int y = firstY; y <= lastY; y++) {
+                int id = _bm.GetID(point.X, y, point.Z);
+                if (id != BlockType.AIR &&
+                        BlockInfo.BlockTable[id].State == BlockState.NONSOLID) {
+                    _bm.SetBlock(point.X, y, point.Z, AcquaticBlocks.Air);
+                }
+            }
+        }
+
+    }
+}
