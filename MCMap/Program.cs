@@ -8,7 +8,7 @@ using System.Linq;
 using static MinecraftMapper.OsmReader;
 
 namespace MinecraftMapper {
-    class Mapper {
+    partial class Mapper {
         private readonly NbtWorld _world;
         private readonly PositionConverter _conv;
         private readonly OsmReader _reader;
@@ -768,6 +768,9 @@ namespace MinecraftMapper {
                 }
 
                 WriteLine("Building {4}: {0} {1} ({2}/{3})", building.HouseNumber, building.Street, cur, count, building.Id);
+                if (TryDrawIconicBuilding(building, buildingPoints, roofPoints)) {
+                    continue;
+                }
                 DrawBuilding(
                     building,
                     buildingPoints,
