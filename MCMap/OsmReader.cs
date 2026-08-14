@@ -1,8 +1,8 @@
-﻿using Kaos.Collections;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -336,7 +336,7 @@ namespace MinecraftMapper {
 
         public void ReadData() {
             var allNodes = new Dictionary<long, Node>();
-            RankedDictionary<double, RankedDictionary<double, Node>> orderedNodes = new RankedDictionary<double, RankedDictionary<double, Node>>();
+            SortedDictionary<double, SortedDictionary<double, Node>> orderedNodes = new SortedDictionary<double, SortedDictionary<double, Node>>();
 
             var reader = XmlReader.Create(new FileStream(_sourceXml, FileMode.Open));
             HashSet<string> nodeNames = new HashSet<string>() {
@@ -379,9 +379,9 @@ namespace MinecraftMapper {
 
                         allNodes[id] = newNode;
                         if (includeInOrder) {
-                            RankedDictionary<double, Node> longNodes;
+                            SortedDictionary<double, Node> longNodes;
                             if (!orderedNodes.TryGetValue(lat, out longNodes)) {
-                                longNodes = orderedNodes[lat] = new RankedDictionary<double, Node>();
+                                longNodes = orderedNodes[lat] = new SortedDictionary<double, Node>();
                             }
                             longNodes[longitude] = newNode;
                         }
@@ -463,8 +463,10 @@ namespace MinecraftMapper {
                             }
 
                             int itemsCount = 0;
-                            foreach (var group in orderedNodes.ElementsBetween(minLat, maxLat)) {
-                                foreach (var longAndNode in group.Value.ElementsBetween(minLong, maxLong)) {
+                            foreach (var group in orderedNodes.Where(
+                                    item => item.Key >= minLat && item.Key <= maxLat)) {
+                                foreach (var longAndNode in group.Value.Where(
+                                        item => item.Key >= minLong && item.Key <= maxLong)) {
 
                                     var node = longAndNode.Value;
                                     if (node.Lat >= minLat && node.Lat <= maxLat &&
