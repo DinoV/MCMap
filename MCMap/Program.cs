@@ -609,34 +609,12 @@ namespace MinecraftMapper {
             if (center.X < 5 || center.Z < 5) {
                 return;
             }
+            int height;
+            if (!TryPrepareBusStopFootprint(direction, center, out height)) {
+                return;
+            }
             // draw sides
             if (direction == Direction.South || direction == Direction.North) {
-                // level things out...
-                var maxHeight = 0;
-                for (int z = 0; z < 3; z++) {
-                    var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
-                    for (int x = -2; x <= 2; x++) {
-                        if (!_conv.IsValidPoint(new BlockPosition(center.X + x, zLoc))) {
-                            return;
-                        }
-
-                        maxHeight = Math.Max(maxHeight, GetHeight(center.X + x, zLoc));
-                    }
-                }
-                for (int z = 0; z < 3; z++) {
-                    var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
-                    for (int x = -2; x <= 2; x++) {
-                        for (int i = _bm.GetHeight(center.X + x, zLoc); i < maxHeight; i++) {
-                            _bm.SetBlock(
-                                center.X + x,
-                                GetHeight(center.X + x, zLoc),
-                                zLoc,
-                                AcquaticBlocks.GrassBlock,
-                                snowy: false);
-                        }
-                    }
-                }
-                var height = maxHeight + 1;
                 // draw sides
                 for (int z = 0; z < 3; z++) {
                     var zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
@@ -669,26 +647,6 @@ namespace MinecraftMapper {
                     }
                 }
             } else {
-                var maxHeight = 0;
-                for (int x = 0; x < 3; x++) {
-                    var xLoc = direction == Direction.West ? center.X - x : center.X + x;
-                    for (int z = -2; z <= 2; z++) {
-                        if (!_conv.IsValidPoint(new BlockPosition(xLoc, center.Z + z))) {
-                            return;
-                        }
-                        maxHeight = Math.Max(maxHeight, GetHeight(xLoc, center.Z + z));
-                    }
-                }
-                for (int x = 0; x < 3; x++) {
-                    var xLoc = direction == Direction.West ? center.X - x : center.X + x;
-                    for (int z = -2; z <= 2; z++) {
-                        for (int i = GetHeight(xLoc, center.Z + z); i < maxHeight; i++) {
-                            _bm.SetBlock(xLoc, i, center.Z + z, AcquaticBlocks.GrassBlock, snowy: false);
-                        }
-                    }
-                }
-
-                var height = maxHeight + 1;
                 // draw sides
                 for (int x = 0; x < 3; x++) {
                     var xLoc = direction == Direction.West ? center.X - x : center.X + x;
@@ -719,6 +677,70 @@ namespace MinecraftMapper {
                             _bm.SetBlock(center.X, height + y, center.Z + z, AcquaticBlocks.GlassPane, north: false, east: false, south: false, west: false);
                         }
                     }
+                }
+            }
+        }
+
+        private bool TryPrepareBusStopFootprint(Direction direction,
+                BlockPosition center, out int shelterBaseHeight) {
+            var footprint = new List<BlockPosition>();
+            if (direction == Direction.South || direction == Direction.North) {
+                for (int z = 0; z < 3; z++) {
+                    int zLoc = direction == Direction.North ? center.Z - z : center.Z + z;
+                    for (int x = -2; x <= 2; x++) {
+                        footprint.Add(new BlockPosition(center.X + x, zLoc));
+                    }
+                }
+            } else {
+                for (int x = 0; x < 3; x++) {
+                    int xLoc = direction == Direction.West ? center.X - x : center.X + x;
+                    for (int z = -2; z <= 2; z++) {
+                        footprint.Add(new BlockPosition(xLoc, center.Z + z));
+                    }
+                }
+            }
+
+            if (footprint.Any(point => !_conv.IsValidPoint(point))) {
+                shelterBaseHeight = 0;
+                return false;
+            }
+
+            var groundHeights = footprint.ToDictionary(
+                point => point,
+                point => GetTerrainHeight(point));
+            int maxGroundHeight = groundHeights.Values.Max();
+
+            foreach (var point in footprint) {
+                int groundHeight = groundHeights[point];
+                ClearNonSolidBlocks(point, groundHeight + 1, maxGroundHeight + 4);
+                for (int y = groundHeight + 1; y <= maxGroundHeight; y++) {
+                    _bm.SetBlock(point.X, y, point.Z,
+                        AcquaticBlocks.GrassBlock, snowy: false);
+                }
+            }
+
+            shelterBaseHeight = maxGroundHeight + 1;
+            return true;
+        }
+
+        private int GetTerrainHeight(BlockPosition point) {
+            int height = GetHeight(point);
+            while (height > 0) {
+                int id = _bm.GetID(point.X, height, point.Z);
+                if (BlockInfo.BlockTable[id].State != BlockState.NONSOLID) {
+                    break;
+                }
+                height--;
+            }
+            return height;
+        }
+
+        private void ClearNonSolidBlocks(BlockPosition point, int firstY, int lastY) {
+            for (int y = firstY; y <= lastY; y++) {
+                int id = _bm.GetID(point.X, y, point.Z);
+                if (id != BlockType.AIR &&
+                        BlockInfo.BlockTable[id].State == BlockState.NONSOLID) {
+                    _bm.SetBlock(point.X, y, point.Z, AcquaticBlocks.Air);
                 }
             }
         }
