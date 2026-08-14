@@ -21,6 +21,7 @@ namespace MinecraftMapper {
         public readonly List<AmenityNode> Amenities = new List<AmenityNode>();
         public readonly List<LandInfo> LandUses = new List<LandInfo>();
         public readonly List<LeisureInfo> Leisures = new List<LeisureInfo>();
+        public readonly List<CoastlineInfo> Coastlines = new List<CoastlineInfo>();
         private readonly string _sourceXml;
   
         public OsmReader(string sourceXml) {
@@ -529,6 +530,9 @@ namespace MinecraftMapper {
                         } else if (tags.amenity == Amenity.Parking) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             ParkingLots.Add(new ParkingInfo(wayId, nodes.ToArray(), tags.parking, tags.surface));
+                        } else if (tags.coastline) {
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            Coastlines.Add(new CoastlineInfo(wayId, nodes.ToArray()));
                         } else if (tags.landUse != LandUse.None) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             LandUses.Add(new LandInfo(wayId, tags.landUse, nodes.ToArray()));
@@ -549,6 +553,16 @@ namespace MinecraftMapper {
             public LandInfo(long wayId, OsmReader.LandUse landUse, Node[] nodes) {
                 WayId = wayId;
                 LandUse = landUse;
+                Nodes = nodes;
+            }
+        }
+
+        internal class CoastlineInfo {
+            public readonly long WayId;
+            public readonly Node[] Nodes;
+
+            public CoastlineInfo(long wayId, Node[] nodes) {
+                WayId = wayId;
                 Nodes = nodes;
             }
         }
@@ -741,6 +755,7 @@ namespace MinecraftMapper {
             public LandUse landUse;
             public Leisure leisuire;
             public RailType railType;
+            public bool coastline;
         }
 
         public enum Parking {
@@ -810,6 +825,9 @@ namespace MinecraftMapper {
                     if (value == "allotments") {
                         tagInfo.landUse = LandUse.Allotments;
                     }
+                    break;
+                case "natural":
+                    tagInfo.coastline = value == "coastline";
                     break;
                 case "direction":
                     int dir;

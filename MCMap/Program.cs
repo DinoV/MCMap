@@ -150,6 +150,8 @@ namespace MinecraftMapper {
                 WriteLine("{0} roads", _reader.Ways.Count);
 
                 if (_roads.Length == 0) {
+                    DrawCoastlines();
+
                     DrawLandUses();
 
                     DrawLeisures();
@@ -2428,6 +2430,84 @@ namespace MinecraftMapper {
                 BlockName = blockName;
                 Properties = properties;
             }
+        }
+
+        private void DrawCoastlines() {
+            const int MaximumCoastlineArea = 250000;
+
+            foreach (var coastline in _reader.Coastlines) {
+                var polygon = coastline.Nodes
+                    .Select(node => _conv.ToBlock(node.Lat, node.Long))
+                    .Where(point => _conv.IsValidPoint(point))
+                    .ToList();
+                if (polygon.Count < 3) {
+                    continue;
+                }
+
+                // A coastline is deliberately open: its ordered nodes have land on
+                // the left and water on the right. Closing its two landward ends
+                // produces the bounded piece which must be joined to the existing
+                // terrain (piers are a common example).
+                int left = polygon.Min(point => point.X);
+                int right = polygon.Max(point => point.X);
+                int top = polygon.Min(point => point.Z);
+                int bottom = polygon.Max(point => point.Z);
+                long area = (long)(right - left + 1) * (bottom - top + 1);
+                if (area > MaximumCoastlineArea) {
+                    WriteLine("Skipping coastline {0}: its {1}-block bounding area is too large.",
+                        coastline.WayId, area);
+                    continue;
+                }
+
+                int mergeHeight = Math.Max(
+                    GetHeight(polygon[0]),
+                    GetHeight(polygon[polygon.Count - 1]));
+                int rendered = 0;
+                for (int z = top; z <= bottom; z++) {
+                    for (int x = left; x <= right; x++) {
+                        var point = new BlockPosition(x, z);
+                        if (!_conv.IsValidPoint(point) ||
+                                !IsInsidePolygon(x + 0.5, z + 0.5, polygon)) {
+                            continue;
+                        }
+
+                        int height = GetHeight(point);
+                        if (height > mergeHeight) {
+                            continue;
+                        }
+
+                        // Build a solid platform one block above the adjoining
+                        // terrain. Filling the short column also prevents a pier
+                        // from floating when the heightmap contains water or air.
+                        int firstY = Math.Max(height + 1, mergeHeight - 15);
+                        for (int y = firstY; y <= mergeHeight + 1; y++) {
+                            _bm.SetBlock(x, y, z, AcquaticBlocks.StoneBricks);
+                        }
+                        rendered++;
+                    }
+                }
+                WriteLine("Rendered coastline {0}: {1} blocks at height {2}.",
+                    coastline.WayId, rendered, mergeHeight + 1);
+            }
+        }
+
+        private static bool IsInsidePolygon(double x, double z,
+                IList<BlockPosition> polygon) {
+            bool inside = false;
+            for (int current = 0, previous = polygon.Count - 1;
+                    current < polygon.Count; previous = current++) {
+                double currentZ = polygon[current].Z;
+                double previousZ = polygon[previous].Z;
+                if ((currentZ > z) == (previousZ > z)) {
+                    continue;
+                }
+                double edgeX = (polygon[previous].X - polygon[current].X) *
+                    (z - currentZ) / (previousZ - currentZ) + polygon[current].X;
+                if (x < edgeX) {
+                    inside = !inside;
+                }
+            }
+            return inside;
         }
 
         class RoadRenderer {
