@@ -6,7 +6,7 @@ This is the in-process equivalent of the earlier four-command workflow:
 1. Open the source VRT, crop it with an EPSG:4326 longitude/latitude window,
    resample to a one-metre grid, and expand the east and south edges so the
    raster dimensions are multiples of 512 pixels while preserving the
-   requested upper-left corner.
+   literal geographic northwest coordinate supplied with --west/--north.
 2. Compute the stretch range from the originally requested (unpadded)
    window by default, then convert the full 512-aligned raster to an 8-bit
    grayscale image using that range and a configurable exponent (default:
@@ -37,6 +37,7 @@ feet before it is passed to gdal.Translate().
 from __future__ import annotations
 
 import argparse
+import math
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -51,7 +52,7 @@ DEFAULT_LAND_START = 8
 DEFAULT_WATER_INPUT_VALUE = 0
 DEFAULT_CHUNK_ROWS = 512
 DEFAULT_TILE_SIZE_PIXELS = 512
-OUTPUT_MAXIMUM = 200
+OUTPUT_MAXIMUM = 180
 
 
 @dataclass(frozen=True)
@@ -548,6 +549,8 @@ def print_map_bounds(bounds: MapBounds) -> None:
         f"{projected.west:.9f} {projected.north:.9f} "
         f"{projected.east:.9f} {projected.south:.9f}"
     )
+    print("  MCMap raster origin:")
+    print(f"    /pos:{projected.west:.9f},{projected.north:.9f}")
     print("  EPSG:4326 envelope (west, north, east, south):")
     print(
         "    "
@@ -604,6 +607,7 @@ def round_up_to_multiple(value: int, multiple: int) -> int:
 def crop_and_resample(
     *,
     gdal: Any,
+    osr: Any,
     source_vrt: str,
     output_tif: Path,
     west: float,
@@ -614,88 +618,130 @@ def crop_and_resample(
     metres_per_pixel: float,
     tile_size: int,
 ) -> tuple[int, int, int, int]:
+    """Crop and resample while anchoring the literal input northwest point.
+
+    A longitude/latitude rectangle generally becomes a slightly rotated or
+    curved quadrilateral in a projected CRS. GDAL's normal ``projWinSRS``
+    handling converts that quadrilateral to a projected axis-aligned envelope.
+    The envelope's upper-left corner is not necessarily the transformed
+    ``(west, north)`` point.
+
+    This implementation transforms the literal northwest point itself and uses
+    it as pixel corner (0, 0). It then grows the raster only eastward and
+    southward. Consequently, a narrow part of the requested geographic box can
+    lie west or north of the anchored projected grid. Such an overhang is
+    reported rather than silently moving the anchor.
+    """
+
     print("\nStage 1/4: cropping, aligning, and resampling the VRT")
 
     source = gdal.OpenEx(source_vrt, gdal.OF_RASTER | gdal.OF_READONLY)
     if source is None:
         raise RuntimeError(f"GDAL could not open the input VRT: {source_vrt}")
 
-    resolution_us_ft = metres_per_pixel * US_SURVEY_FEET_PER_METER
-    preview_vrt = output_tif.with_name(f"{output_tif.stem}-requested-window.vrt")
-    remove_dataset_files(preview_vrt)
-
-    requested = None
     result = None
     try:
-        # Create a lightweight VRT describing the crop GDAL would normally
-        # create. Its geotransform supplies the exact upper-left anchor and
-        # pixel size without first materialising the raster data.
-        preview_options = gdal.TranslateOptions(
-            format="VRT",
-            outputType=gdal.GDT_Float32,
-            projWin=[west, north, east, south],
-            projWinSRS=projwin_srs,
-            xRes=resolution_us_ft,
-            yRes=resolution_us_ft,
-            resampleAlg="average",
-            overviewLevel="NONE",
+        projection = source.GetProjectionRef() or source.GetProjection()
+        if not projection:
+            raise RuntimeError(
+                "The input VRT has no coordinate reference system, so the "
+                "requested northwest point cannot be transformed."
+            )
+
+        source_srs = osr.SpatialReference()
+        if source_srs.ImportFromWkt(projection) != 0:
+            raise RuntimeError(
+                "GDAL could not parse the input VRT coordinate reference "
+                "system."
+            )
+        set_traditional_axis_order(osr, source_srs)
+
+        request_srs = osr.SpatialReference()
+        set_from_user_input = getattr(request_srs, "SetFromUserInput", None)
+        if set_from_user_input is None:
+            raise RuntimeError(
+                "This GDAL build does not expose SpatialReference."
+                "SetFromUserInput()."
+            )
+        if set_from_user_input(projwin_srs) != 0:
+            raise RuntimeError(
+                f"GDAL could not parse --projwin-srs {projwin_srs!r}."
+            )
+        set_traditional_axis_order(osr, request_srs)
+
+        coordinate_transform = osr.CoordinateTransformation(
+            request_srs, source_srs
         )
 
-        requested = gdal.Translate(
-            str(preview_vrt),
-            source,
-            options=preview_options,
+        def transform_point(x: float, y: float) -> Coordinate:
+            transformed = coordinate_transform.TransformPoint(x, y)
+            if transformed is None or len(transformed) < 2:
+                raise RuntimeError(
+                    "GDAL failed to transform a requested-boundary point "
+                    "into the VRT coordinate system."
+                )
+            return Coordinate(float(transformed[0]), float(transformed[1]))
+
+        # Transform the literal input northwest coordinate. This is the exact
+        # source-CRS coordinate assigned to the upper-left raster corner.
+        anchor = transform_point(west, north)
+
+        # Densify each edge before finding the projected extrema. This is more
+        # robust than transforming only the four corners when the CRS change
+        # bends an edge slightly.
+        edge_segments = 100
+        projected_boundary: list[Coordinate] = []
+        for index in range(edge_segments + 1):
+            fraction = index / edge_segments
+            longitude = west + (east - west) * fraction
+            latitude = south + (north - south) * fraction
+
+            projected_boundary.append(transform_point(longitude, north))
+            projected_boundary.append(transform_point(longitude, south))
+            projected_boundary.append(transform_point(west, latitude))
+            projected_boundary.append(transform_point(east, latitude))
+
+        projected_west = min(point.x for point in projected_boundary)
+        projected_north = max(point.y for point in projected_boundary)
+        projected_east = max(point.x for point in projected_boundary)
+        projected_south = min(point.y for point in projected_boundary)
+
+        resolution_us_ft = metres_per_pixel * US_SURVEY_FEET_PER_METER
+
+        # The output starts exactly at the transformed northwest point. Round
+        # outward so the requested east and south extrema are included.
+        requested_width_float = (projected_east - anchor.x) / resolution_us_ft
+        requested_height_float = (anchor.y - projected_south) / resolution_us_ft
+        requested_width = max(
+            1,
+            int(math.ceil(requested_width_float - 1e-12)),
         )
-        if requested is None:
-            raise RuntimeError(
-                "gdal.Translate() could not describe the requested crop."
-            )
-
-        requested_width = int(requested.RasterXSize)
-        requested_height = int(requested.RasterYSize)
-        if requested_width <= 0 or requested_height <= 0:
-            raise RuntimeError(
-                "The requested geographic crop produced an empty raster."
-            )
-
-        geotransform = requested.GetGeoTransform()
-        if geotransform is None or len(geotransform) != 6:
-            raise RuntimeError(
-                "GDAL did not provide a usable geotransform for the "
-                "requested crop."
-            )
-
-        pixel_scale = max(
-            abs(float(geotransform[1])),
-            abs(float(geotransform[5])),
-            1.0,
+        requested_height = max(
+            1,
+            int(math.ceil(requested_height_float - 1e-12)),
         )
-        rotation_tolerance = pixel_scale * 1e-12
-        if (
-            abs(float(geotransform[2])) > rotation_tolerance
-            or abs(float(geotransform[4])) > rotation_tolerance
-        ):
-            raise RuntimeError(
-                "The requested crop has a rotated geotransform. This script "
-                "requires a north-up raster so it can preserve the upper-left "
-                "corner and expand only eastward and southward."
-            )
-        if geotransform[1] <= 0.0 or geotransform[5] >= 0.0:
-            raise RuntimeError(
-                "The requested crop does not have the expected north-up pixel "
-                "orientation."
-            )
 
         aligned_width = round_up_to_multiple(requested_width, tile_size)
         aligned_height = round_up_to_multiple(requested_height, tile_size)
         added_columns = aligned_width - requested_width
         added_rows = aligned_height - requested_height
 
-        upper_left_x = float(geotransform[0])
-        upper_left_y = float(geotransform[3])
-        lower_right_x = upper_left_x + aligned_width * float(geotransform[1])
-        lower_right_y = upper_left_y + aligned_height * float(geotransform[5])
+        lower_right_x = anchor.x + aligned_width * resolution_us_ft
+        lower_right_y = anchor.y - aligned_height * resolution_us_ft
 
+        west_overhang_units = max(0.0, anchor.x - projected_west)
+        north_overhang_units = max(0.0, projected_north - anchor.y)
+        west_overhang_metres = west_overhang_units / US_SURVEY_FEET_PER_METER
+        north_overhang_metres = north_overhang_units / US_SURVEY_FEET_PER_METER
+
+        print(
+            "  Literal northwest anchor: "
+            f"{west:.10f}, {north:.10f} ({projwin_srs})"
+        )
+        print(
+            "  Projected anchor:          "
+            f"{anchor.x:.9f}, {anchor.y:.9f}"
+        )
         print(f"  Requested size: {requested_width} x {requested_height}")
         print(f"  Aligned size:   {aligned_width} x {aligned_height}")
         print(
@@ -703,18 +749,39 @@ def crop_and_resample(
             f"{added_rows} pixel(s) south"
         )
 
+        overhang_tolerance_metres = metres_per_pixel * 1e-6
+        if (
+            west_overhang_metres > overhang_tolerance_metres
+            or north_overhang_metres > overhang_tolerance_metres
+        ):
+            print(
+                "  Geographic-box tradeoff: preserving the literal northwest "
+                "anchor means the projected grid cannot also contain every "
+                "point of the axis-aligned geographic box without extending "
+                "west or north."
+            )
+            if west_overhang_metres > overhang_tolerance_metres:
+                print(
+                    "    Maximum requested-area overhang west of the anchor: "
+                    f"{west_overhang_metres:.3f} metre(s)"
+                )
+            if north_overhang_metres > overhang_tolerance_metres:
+                print(
+                    "    Maximum requested-area overhang north of the anchor: "
+                    f"{north_overhang_metres:.3f} metre(s)"
+                )
+
         progress = ProgressReporter("Crop/resample")
         options = gdal.TranslateOptions(
             format="GTiff",
             outputType=gdal.GDT_Float32,
             projWin=[
-                upper_left_x,
-                upper_left_y,
+                anchor.x,
+                anchor.y,
                 lower_right_x,
                 lower_right_y,
             ],
-            # The planned geotransform is already expressed in the source
-            # VRT's coordinate system, so projWinSRS should be omitted here.
+            # The projected values above are already in the source VRT's CRS.
             width=aligned_width,
             height=aligned_height,
             resampleAlg="average",
@@ -747,21 +814,33 @@ def crop_and_resample(
             )
 
         result_geotransform = result.GetGeoTransform()
-        anchor_tolerance = pixel_scale * 1e-8
+        anchor_tolerance = max(resolution_us_ft, 1.0) * 1e-8
         if (
-            abs(float(result_geotransform[0]) - upper_left_x) > anchor_tolerance
-            or abs(float(result_geotransform[3]) - upper_left_y)
+            abs(float(result_geotransform[0]) - anchor.x) > anchor_tolerance
+            or abs(float(result_geotransform[3]) - anchor.y)
             > anchor_tolerance
         ):
             raise RuntimeError(
-                "GDAL shifted the upper-left anchor while creating the aligned "
-                "raster."
+                "GDAL shifted the literal northwest anchor while creating "
+                "the aligned raster."
+            )
+
+        output_pixel_width = float(result_geotransform[1])
+        output_pixel_height = float(result_geotransform[5])
+        resolution_tolerance = max(resolution_us_ft, 1.0) * 1e-8
+        if (
+            abs(output_pixel_width - resolution_us_ft) > resolution_tolerance
+            or abs(output_pixel_height + resolution_us_ft)
+            > resolution_tolerance
+        ):
+            raise RuntimeError(
+                "GDAL created an unexpected output resolution: "
+                f"({output_pixel_width}, {output_pixel_height}); expected "
+                f"({resolution_us_ft}, {-resolution_us_ft})."
             )
     finally:
         result = None
-        requested = None
         source = None
-        remove_dataset_files(preview_vrt)
 
     return requested_width, requested_height, width, height
 
@@ -1087,7 +1166,8 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
     )
     print(
         f"  Pixel alignment: multiples of {args.tile_size}; "
-        "expand east and south only"
+        "keep the literal input northwest coordinate fixed and expand "
+        "east and south only"
     )
     print(f"  Stretch exponent: {args.exponent:g}")
     if args.scale_min is not None:
@@ -1138,6 +1218,7 @@ def main() -> int:
 
             requested_width, requested_height, width, height = crop_and_resample(
                 gdal=gdal,
+                osr=osr,
                 source_vrt=args.vrt,
                 output_tif=one_metre_tif,
                 west=args.west,
