@@ -24,24 +24,38 @@ No GDAL or PDAL command-line programs are invoked. LAZ input additionally
 requires PDAL's Python bindings. Run the script from an environment containing
 GDAL's Python bindings and NumPy, for example:
 
-    "C:\\Users\\dino_\\anaconda3\\condabin\\conda.bat" run python \
-        make_minecraft_heightmap_gdal_api.py \
+    python lidar.py \
         --vrt WA_KingCo_1_2021.vrt \
         --west -122.3539083 --north 47.5558653 \
         --east -122.2837235 --south 47.4723506 \
         --output duwamish-larger.png \
         --clip-level 100
 
-The King County VRT uses EPSG:6597, whose horizontal unit is the U.S. survey
-foot. Therefore the requested metres-per-pixel value is converted to survey
-feet before it is passed to gdal.Translate().
+Raster input may use any CRS understood by GDAL. It is reprojected to EPSG:6597
+before the literal northwest anchor, one-metre grid, and 512-pixel alignment
+are applied. ``--raster`` and the legacy name ``--vrt`` are aliases.
+
+For example, the USGS 1/3-arc-second geographic GeoTIFF can be read remotely:
+
+    python lidar.py \
+        --raster "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n49w123/USGS_13_n49w123_20240327.tif" \
+        --west -122.7033389 --north 48.2275394 \
+        --east -122.6680931 --south 48.2073796 \
+        --output coupeville-10m.png --clip-level 100 --overwrite
+
+Or downloading the 3m in a zip:
+    python lidar.py \
+        --raster "/vsizip/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/19/IMG/ned19_n48x25_w122x75_wa_puget_sound_2000.zip/ned19_n48x25_w122x75_wa_puget_sound_2000.img" \ 
+        --west -122.7033389  --north 48.2275394 --east -122.6680931 --south 48.2073796 \
+        --output coupeville-3m.png \
+        --clip-level 100 \
+        --resampling bilinear \
 
 For a USGS legacy LPC project containing LAZ point clouds instead of a DEM:
 
     conda install -n lidar -c conda-forge python-pdal gdal numpy
 
-    "C:\\Users\\dino_\\anaconda3\\condabin\\conda.bat" run -n lidar python \
-        lidar.py \
+    python lidar.py \
         --usgs-lpc-project \
         "https://rockyweb.usgs.gov/vdelivery/Datasets/Staged/Elevation/LPC/Projects/legacy/WA_PSLC_2001/" \
         --west -123.56 --north 48.12 --east -123.50 --south 48.07 \
@@ -171,7 +185,12 @@ def parse_args() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--vrt",
-        help="Input VRT filename, URL, or GDAL /vsi path.",
+        "--raster",
+        dest="vrt",
+        help=(
+            "Input raster filename, URL, or GDAL /vsi path. Any "
+            "GDAL-readable CRS is reprojected to EPSG:6597."
+        ),
     )
     source.add_argument(
         "--usgs-lpc-project",
@@ -268,6 +287,16 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_METERS_PER_PIXEL,
         help="Horizontal output resolution in metres. Default: 1.0.",
+    )
+    parser.add_argument(
+        "--resampling",
+        choices=("nearest", "bilinear", "cubic", "average"),
+        default="bilinear",
+        help=(
+            "GDAL raster resampling used while reprojecting to EPSG:6597. "
+            "Bilinear is recommended when expanding 3- or 10-metre DEMs to "
+            "Minecraft's 1-metre grid. Default: bilinear."
+        ),
     )
     parser.add_argument(
         "--tile-size",
@@ -1023,6 +1052,7 @@ def crop_and_resample(
     projwin_srs: str,
     metres_per_pixel: float,
     tile_size: int,
+    resampling: str,
 ) -> tuple[int, int, int, int]:
     """Crop and resample while anchoring the literal input northwest point.
 
@@ -1039,28 +1069,33 @@ def crop_and_resample(
     reported rather than silently moving the anchor.
     """
 
-    print("\nStage 1/4: cropping, aligning, and resampling the VRT")
+    print("\nStage 1/4: reprojecting, cropping, aligning, and resampling")
 
     source = gdal.OpenEx(source_vrt, gdal.OF_RASTER | gdal.OF_READONLY)
     if source is None:
-        raise RuntimeError(f"GDAL could not open the input VRT: {source_vrt}")
+        raise RuntimeError(f"GDAL could not open the input raster: {source_vrt}")
 
     result = None
     try:
         projection = source.GetProjectionRef() or source.GetProjection()
         if not projection:
             raise RuntimeError(
-                "The input VRT has no coordinate reference system, so the "
+                "The input raster has no coordinate reference system, so the "
                 "requested northwest point cannot be transformed."
             )
 
         source_srs = osr.SpatialReference()
         if source_srs.ImportFromWkt(projection) != 0:
             raise RuntimeError(
-                "GDAL could not parse the input VRT coordinate reference "
+                "GDAL could not parse the input raster coordinate reference "
                 "system."
             )
         set_traditional_axis_order(osr, source_srs)
+
+        target_srs = osr.SpatialReference()
+        if target_srs.ImportFromEPSG(6597) != 0:
+            raise RuntimeError("GDAL could not initialise output CRS EPSG:6597.")
+        set_traditional_axis_order(osr, target_srs)
 
         request_srs = osr.SpatialReference()
         set_from_user_input = getattr(request_srs, "SetFromUserInput", None)
@@ -1075,21 +1110,19 @@ def crop_and_resample(
             )
         set_traditional_axis_order(osr, request_srs)
 
-        coordinate_transform = osr.CoordinateTransformation(
-            request_srs, source_srs
-        )
+        coordinate_transform = osr.CoordinateTransformation(request_srs, target_srs)
 
         def transform_point(x: float, y: float) -> Coordinate:
             transformed = coordinate_transform.TransformPoint(x, y)
             if transformed is None or len(transformed) < 2:
                 raise RuntimeError(
                     "GDAL failed to transform a requested-boundary point "
-                    "into the VRT coordinate system."
+                    "into output CRS EPSG:6597."
                 )
             return Coordinate(float(transformed[0]), float(transformed[1]))
 
         # Transform the literal input northwest coordinate. This is the exact
-        # source-CRS coordinate assigned to the upper-left raster corner.
+        # EPSG:6597 coordinate assigned to the upper-left raster corner.
         anchor = transform_point(west, north)
 
         # Densify each edge before finding the projected extrema. This is more
@@ -1145,9 +1178,11 @@ def crop_and_resample(
             f"{west:.10f}, {north:.10f} ({projwin_srs})"
         )
         print(
-            "  Projected anchor:          "
+            "  EPSG:6597 anchor:          "
             f"{anchor.x:.9f}, {anchor.y:.9f}"
         )
+        source_label, _ = spatial_reference_identity(source_srs)
+        print(f"  Input raster CRS:          {source_label}")
         print(f"  Requested size: {requested_width} x {requested_height}")
         print(f"  Aligned size:   {aligned_width} x {aligned_height}")
         print(
@@ -1178,36 +1213,39 @@ def crop_and_resample(
                 )
 
         progress = ProgressReporter("Crop/resample")
-        options = gdal.TranslateOptions(
-            format="GTiff",
-            outputType=gdal.GDT_Float32,
-            projWin=[
-                anchor.x,
-                anchor.y,
-                lower_right_x,
-                lower_right_y,
-            ],
-            # The projected values above are already in the source VRT's CRS.
-            width=aligned_width,
-            height=aligned_height,
-            resampleAlg="average",
-            overviewLevel="NONE",
-            creationOptions=[
+        source_band = source.GetRasterBand(1)
+        source_no_data = None if source_band is None else source_band.GetNoDataValue()
+        warp_arguments: dict[str, Any] = {
+            "format": "GTiff",
+            "outputType": gdal.GDT_Float32,
+            "dstSRS": target_srs.ExportToWkt(),
+            "outputBounds": [anchor.x, lower_right_y, lower_right_x, anchor.y],
+            "width": aligned_width,
+            "height": aligned_height,
+            "resampleAlg": resampling,
+            "dstNodata": -9999.0,
+            "multithread": True,
+            "creationOptions": [
                 "TILED=YES",
                 "COMPRESS=DEFLATE",
                 "PREDICTOR=3",
                 "BIGTIFF=IF_SAFER",
             ],
-            callback=progress,
+            "callback": progress,
+        }
+        if source_no_data is not None:
+            warp_arguments["srcNodata"] = source_no_data
+        options = gdal.WarpOptions(
+            **warp_arguments,
         )
 
         try:
-            result = gdal.Translate(str(output_tif), source, options=options)
+            result = gdal.Warp(str(output_tif), source, options=options)
         finally:
             progress.finish()
 
         if result is None:
-            raise RuntimeError("gdal.Translate() did not create the cropped TIFF.")
+            raise RuntimeError("gdal.Warp() did not create the aligned TIFF.")
         result.FlushCache()
 
         width = int(result.RasterXSize)
@@ -1562,7 +1600,7 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
 
     print("Processing plan:")
     if args.vrt:
-        print(f"  Input VRT: {args.vrt}")
+        print(f"  Input raster: {args.vrt}")
     else:
         print(f"  USGS LPC project: {args.usgs_lpc_project}")
         print(f"  LAZ cache: {Path(args.lpc_cache).resolve()}")
@@ -1581,6 +1619,7 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
         f"  Resolution: {args.meters_per_pixel:g} metre(s)/pixel "
         f"({resolution_us_ft:.15g} ftUS/pixel in EPSG:6597)"
     )
+    print(f"  Raster resampling: {args.resampling}")
     print(
         f"  Pixel alignment: multiples of {args.tile_size}; "
         "keep the literal input northwest coordinate fixed and expand "
@@ -1670,6 +1709,7 @@ def main() -> int:
                 projwin_srs=args.projwin_srs,
                 metres_per_pixel=args.meters_per_pixel,
                 tile_size=args.tile_size,
+                resampling=args.resampling,
             )
 
             map_bounds = read_map_bounds(
