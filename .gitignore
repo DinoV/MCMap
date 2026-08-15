@@ -1,0 +1,8 @@
+.vs
+lidar/*.png
+lidar/*.xml
+lidar/*.tif
+lidar/*.vrt
+lidar/.usgs-lpc-cache/*
+lidar/__pycache__/
+packages/*
