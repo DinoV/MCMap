@@ -3,7 +3,9 @@
 
 This is the in-process equivalent of the earlier four-command workflow:
 
-1. Open the source VRT, crop it with an EPSG:4326 longitude/latitude window,
+1. Open the source VRT, or build a temporary bare-earth DEM from the
+   intersecting LAZ tiles in a USGS LPC project, then crop it with an
+   EPSG:4326 longitude/latitude window,
    resample to a one-metre grid, and expand the east and south edges so the
    raster dimensions are multiples of 512 pixels while preserving the
    literal geographic northwest coordinate supplied with --west/--north.
@@ -18,8 +20,9 @@ This is the in-process equivalent of the earlier four-command workflow:
 5. Report the exact final aligned raster bounds in the source CRS and in
    EPSG:4326, including the four geographic corner coordinates.
 
-No subprocesses or command-line GDAL programs are invoked. Run the script from
-an environment containing both GDAL's Python bindings and NumPy, for example:
+No GDAL or PDAL command-line programs are invoked. LAZ input additionally
+requires PDAL's Python bindings. Run the script from an environment containing
+GDAL's Python bindings and NumPy, for example:
 
     "C:\\Users\\dino_\\anaconda3\\condabin\\conda.bat" run python \
         make_minecraft_heightmap_gdal_api.py \
@@ -32,17 +35,43 @@ an environment containing both GDAL's Python bindings and NumPy, for example:
 The King County VRT uses EPSG:6597, whose horizontal unit is the U.S. survey
 foot. Therefore the requested metres-per-pixel value is converted to survey
 feet before it is passed to gdal.Translate().
+
+For a USGS legacy LPC project containing LAZ point clouds instead of a DEM:
+
+    conda install -n lidar -c conda-forge python-pdal gdal numpy
+
+    "C:\\Users\\dino_\\anaconda3\\condabin\\conda.bat" run -n lidar python \
+        lidar.py \
+        --usgs-lpc-project \
+        "https://rockyweb.usgs.gov/vdelivery/Datasets/Staged/Elevation/LPC/Projects/legacy/WA_PSLC_2001/" \
+        --west -123.56 --north 48.12 --east -123.50 --south 48.07 \
+        --output pslc.png --clip-level 65 --overwrite
+
+The first run downloads the small per-tile XML metadata index and only the LAZ
+tiles intersecting the requested longitude/latitude rectangle. Later runs use
+the files in --lpc-cache. LAS classification 2 (ground) is rasterized by
+default; use --lpc-classification if a different project uses another class.
+Known unclassified legacy projects such as WA_PSLC_2001 automatically apply
+their metadata CRS and run PDAL's SMRF ground classifier. This can be overridden
+with --lpc-source-srs and --lpc-ground-mode.
 """
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import sys
 import tempfile
 from typing import Any
+from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 
 US_SURVEY_FEET_PER_METER = 3937.0 / 1200.0
@@ -53,6 +82,13 @@ DEFAULT_WATER_INPUT_VALUE = 0
 DEFAULT_CHUNK_ROWS = 512
 DEFAULT_TILE_SIZE_PIXELS = 512
 OUTPUT_MAXIMUM = 180
+
+# Older USGS legacy projects can omit the CRS from every LAZ header and can
+# contain only ASPRS class 1 (unclassified) points.  These project-level facts
+# come from the accompanying FGDC XML metadata.
+LEGACY_LPC_PROJECT_DEFAULTS: dict[str, tuple[str, bool]] = {
+    "WA_PSLC_2001": ("EPSG:2285", True),
+}
 
 
 @dataclass(frozen=True)
@@ -87,6 +123,15 @@ class MapBounds:
     south_west: Coordinate
 
 
+@dataclass(frozen=True)
+class LpcTile:
+    """One USGS LPC tile discovered from its FGDC metadata XML."""
+
+    name: str
+    bounds: Bounds
+    laz_url: str
+
+
 class ProgressReporter:
     """A quiet GDAL progress callback that reports every five percent."""
 
@@ -117,16 +162,24 @@ class ProgressReporter:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Crop an EPSG:6597 elevation VRT, create a metric raster, "
-            "stretch it, apply a non-water floor, and emit an 8-bit PNG "
-            "without spawning GDAL command-line processes."
+            "Crop an elevation VRT or rasterize a USGS LPC/LAZ project, "
+            "create a metric raster, stretch it, apply a non-water floor, "
+            "and emit an 8-bit PNG."
         )
     )
 
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--vrt",
-        required=True,
         help="Input VRT filename, URL, or GDAL /vsi path.",
+    )
+    source.add_argument(
+        "--usgs-lpc-project",
+        help=(
+            "USGS legacy LPC project URL, such as the WA_PSLC_2001 project "
+            "directory or its prd-tnm S3 metadata index URL. Intersecting "
+            "LAZ tiles are downloaded and rasterized as a bare-earth DEM."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -253,6 +306,41 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate and print the processing plan without loading GDAL.",
     )
+    lpc = parser.add_argument_group("USGS LPC/LAZ input")
+    lpc.add_argument(
+        "--lpc-cache",
+        default=".usgs-lpc-cache",
+        help="Directory used to cache metadata and downloaded LAZ tiles.",
+    )
+    lpc.add_argument(
+        "--lpc-classification",
+        type=int,
+        default=2,
+        help="LAS classification used for bare earth. Default: 2 (ground).",
+    )
+    lpc.add_argument(
+        "--lpc-source-srs",
+        help=(
+            "Fallback CRS applied only when LAZ headers omit their spatial "
+            "reference. WA_PSLC_2001 is detected as EPSG:2285 automatically."
+        ),
+    )
+    lpc.add_argument(
+        "--lpc-ground-mode",
+        choices=("auto", "classified", "smrf"),
+        default="auto",
+        help=(
+            "How ground points are obtained. 'classified' uses the existing "
+            "--lpc-classification, 'smrf' classifies ground from unclassified "
+            "points, and 'auto' uses known project metadata. Default: auto."
+        ),
+    )
+    lpc.add_argument(
+        "--lpc-metadata-workers",
+        type=int,
+        default=12,
+        help="Concurrent USGS metadata requests. Default: 12.",
+    )
 
     return parser.parse_args()
 
@@ -283,6 +371,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--tile-size must be greater than zero.")
     if args.chunk_rows <= 0:
         raise ValueError("--chunk-rows must be greater than zero.")
+    if not 0 <= args.lpc_classification <= 255:
+        raise ValueError("--lpc-classification must be between 0 and 255.")
+    if args.lpc_metadata_workers <= 0:
+        raise ValueError("--lpc-metadata-workers must be greater than zero.")
 
     output = Path(args.output)
     if output.suffix.lower() != ".png":
@@ -292,10 +384,324 @@ def validate_args(args: argparse.Namespace) -> None:
             f"Output already exists: {output}. Use --overwrite to replace it."
         )
 
-    vrt = args.vrt
-    is_virtual_path = vrt.startswith("/vsi") or "://" in vrt
-    if not is_virtual_path and not Path(vrt).exists():
-        raise FileNotFoundError(f"Input VRT does not exist: {vrt}")
+    if args.vrt:
+        vrt = args.vrt
+        is_virtual_path = vrt.startswith("/vsi") or "://" in vrt
+        if not is_virtual_path and not Path(vrt).exists():
+            raise FileNotFoundError(f"Input VRT does not exist: {vrt}")
+
+
+def normalize_usgs_lpc_project_url(url: str) -> tuple[str, str]:
+    """Return a browsable project root and stable project name."""
+
+    parsed = urlparse(url)
+    query_prefix = parse_qs(parsed.query).get("prefix", [""])[0]
+    source = query_prefix or parsed.path
+    match = re.search(r"(?:metadata|Projects)/legacy/([^/?#]+)", source)
+    if match is None:
+        match = re.search(r"/legacy/([^/?#]+)/?", source)
+    if match is None:
+        raise ValueError(
+            "Could not determine the USGS LPC project name from "
+            f"--usgs-lpc-project: {url}"
+        )
+
+    project_name = match.group(1)
+    project_root = (
+        "https://rockyweb.usgs.gov/vdelivery/Datasets/Staged/Elevation/"
+        f"LPC/Projects/legacy/{project_name}/"
+    )
+    return project_root, project_name
+
+
+def read_url(url: str) -> bytes:
+    request = Request(url, headers={"User-Agent": "MCMap-lidar/1.0"})
+    with urlopen(request, timeout=60) as response:
+        return response.read()
+
+
+def parse_lpc_metadata(xml_bytes: bytes, metadata_url: str) -> LpcTile:
+    root = ET.fromstring(xml_bytes)
+
+    def required_text(path: str) -> str:
+        element = root.find(path)
+        if element is None or not element.text or not element.text.strip():
+            raise RuntimeError(
+                f"USGS metadata is missing {path}: {metadata_url}"
+            )
+        return "".join(element.text.split())
+
+    bounds = Bounds(
+        west=float(required_text(".//westbc")),
+        north=float(required_text(".//northbc")),
+        east=float(required_text(".//eastbc")),
+        south=float(required_text(".//southbc")),
+    )
+    laz_url = required_text(".//networkr")
+    name = Path(urlparse(laz_url).path).name
+    if not name.lower().endswith((".laz", ".las")):
+        raise RuntimeError(
+            f"USGS metadata does not reference a LAS/LAZ tile: {metadata_url}"
+        )
+    return LpcTile(name=name, bounds=bounds, laz_url=laz_url)
+
+
+def discover_lpc_tiles(
+    *, project_root: str, cache_directory: Path, workers: int
+) -> list[LpcTile]:
+    cache_directory.mkdir(parents=True, exist_ok=True)
+    index_cache = cache_directory / "tile-index.json"
+    if index_cache.exists():
+        records = json.loads(index_cache.read_text(encoding="utf-8"))
+        return [
+            LpcTile(
+                name=record["name"],
+                bounds=Bounds(**record["bounds"]),
+                laz_url=record["laz_url"],
+            )
+            for record in records
+        ]
+
+    metadata_root = urljoin(project_root, "metadata/")
+    print(f"Reading USGS tile index: {metadata_root}")
+    listing = read_url(metadata_root).decode("utf-8", errors="replace")
+    filenames = sorted(
+        set(re.findall(r'href=["\']([^"\']+\.xml)["\']', listing, re.I))
+    )
+    if not filenames:
+        raise RuntimeError(
+            "The USGS project metadata directory did not list any XML files: "
+            f"{metadata_root}"
+        )
+
+    tiles: list[LpcTile] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                lambda metadata_url: parse_lpc_metadata(
+                    read_url(metadata_url), metadata_url
+                ),
+                urljoin(metadata_root, filename),
+            ): filename
+            for filename in filenames
+        }
+        completed = 0
+        for future in as_completed(futures):
+            tiles.append(future.result())
+            completed += 1
+            print(
+                f"\rUSGS metadata: {completed}/{len(filenames)}",
+                end="",
+                flush=True,
+            )
+    print()
+    tiles.sort(key=lambda tile: tile.name)
+
+    records = [
+        {
+            "name": tile.name,
+            "bounds": {
+                "west": tile.bounds.west,
+                "north": tile.bounds.north,
+                "east": tile.bounds.east,
+                "south": tile.bounds.south,
+            },
+            "laz_url": tile.laz_url,
+        }
+        for tile in tiles
+    ]
+    index_cache.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    return tiles
+
+
+def bounds_intersect(left: Bounds, right: Bounds) -> bool:
+    return not (
+        left.east <= right.west
+        or left.west >= right.east
+        or left.north <= right.south
+        or left.south >= right.north
+    )
+
+
+def download_lpc_tile(tile: LpcTile, tile_directory: Path) -> Path:
+    tile_directory.mkdir(parents=True, exist_ok=True)
+    destination = tile_directory / tile.name
+    if destination.exists() and destination.stat().st_size > 0:
+        print(f"Using cached LAZ tile: {tile.name}")
+        return destination
+
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    print(f"Downloading LAZ tile: {tile.name}")
+    request = Request(tile.laz_url, headers={"User-Agent": "MCMap-lidar/1.0"})
+    try:
+        with urlopen(request, timeout=120) as response, temporary.open("wb") as output:
+            total = int(response.headers.get("Content-Length", "0"))
+            received = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+                received += len(chunk)
+                if total:
+                    print(
+                        f"\r  {received * 100 // total:3d}% "
+                        f"({received / 1048576:.1f}/{total / 1048576:.1f} MiB)",
+                        end="",
+                        flush=True,
+                    )
+        if total:
+            print()
+        temporary.replace(destination)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return destination
+
+
+def transform_bounds(osr: Any, bounds: Bounds, target_srs_text: str) -> Bounds:
+    source_srs = osr.SpatialReference()
+    source_srs.ImportFromEPSG(4326)
+    set_traditional_axis_order(osr, source_srs)
+    target_srs = osr.SpatialReference()
+    if target_srs.SetFromUserInput(target_srs_text) != 0:
+        raise RuntimeError(f"GDAL could not initialise {target_srs_text}.")
+    set_traditional_axis_order(osr, target_srs)
+    transform = osr.CoordinateTransformation(source_srs, target_srs)
+    corners = [
+        transform.TransformPoint(bounds.west, bounds.north),
+        transform.TransformPoint(bounds.east, bounds.north),
+        transform.TransformPoint(bounds.east, bounds.south),
+        transform.TransformPoint(bounds.west, bounds.south),
+    ]
+    return Bounds(
+        west=min(point[0] for point in corners),
+        north=max(point[1] for point in corners),
+        east=max(point[0] for point in corners),
+        south=min(point[1] for point in corners),
+    )
+
+
+def create_lpc_dem(
+    *,
+    osr: Any,
+    project_url: str,
+    cache_root: Path,
+    output_tif: Path,
+    geographic_bounds: Bounds,
+    metres_per_pixel: float,
+    classification: int,
+    source_srs: str | None,
+    ground_mode: str,
+    metadata_workers: int,
+) -> Path:
+    project_root, project_name = normalize_usgs_lpc_project_url(project_url)
+    project_default_srs, project_needs_smrf = LEGACY_LPC_PROJECT_DEFAULTS.get(
+        project_name, (None, False)
+    )
+    fallback_srs = source_srs or project_default_srs
+    use_smrf = ground_mode == "smrf" or (
+        ground_mode == "auto" and project_needs_smrf
+    )
+    project_cache = cache_root.resolve() / project_name
+    tiles = discover_lpc_tiles(
+        project_root=project_root,
+        cache_directory=project_cache,
+        workers=metadata_workers,
+    )
+    selected = [tile for tile in tiles if bounds_intersect(tile.bounds, geographic_bounds)]
+    if not selected:
+        raise RuntimeError(
+            f"No {project_name} LAZ tiles intersect the requested coordinates."
+        )
+    print(f"Selected {len(selected)} of {len(tiles)} LAZ tiles from {project_name}.")
+    local_tiles = [
+        download_lpc_tile(tile, project_cache / "LAZ") for tile in selected
+    ]
+
+    try:
+        import pdal
+    except ImportError as error:
+        raise RuntimeError(
+            "The PDAL Python bindings are not installed in this environment. "
+            "Run this script with 'conda run -n lidar python lidar.py ...' "
+            "or install them with 'conda install -c conda-forge python-pdal'."
+        ) from error
+
+    # Crop before the potentially expensive ground classifier. SMRF's distance
+    # parameters are defined in the coordinate units, so perform it in metric
+    # UTM rather than either Washington State Plane CRS (whose unit is ftUS).
+    processing_srs = "EPSG:32610"
+    processing_bounds = transform_bounds(osr, geographic_bounds, processing_srs)
+    target_srs = "EPSG:6597"
+    projected = transform_bounds(osr, geographic_bounds, target_srs)
+    resolution = metres_per_pixel * US_SURVEY_FEET_PER_METER
+    pipeline: list[dict[str, Any]] = []
+    for path in local_tiles:
+        reader: dict[str, Any] = {"type": "readers.las", "filename": str(path)}
+        if fallback_srs:
+            reader["default_srs"] = fallback_srs
+        pipeline.append(reader)
+    if len(local_tiles) > 1:
+        pipeline.append({"type": "filters.merge"})
+    pipeline.extend(
+        [
+            {"type": "filters.reprojection", "out_srs": processing_srs},
+            {
+                "type": "filters.crop",
+                "bounds": (
+                    f"([{processing_bounds.west},{processing_bounds.east}],"
+                    f"[{processing_bounds.south},{processing_bounds.north}])"
+                ),
+            },
+        ]
+    )
+    if use_smrf:
+        print(
+            "The project contains unclassified points; running PDAL SMRF "
+            "ground classification."
+        )
+        pipeline.append({"type": "filters.smrf"})
+    pipeline.extend(
+        [
+            {
+                "type": "filters.range",
+                "limits": f"Classification[{classification}:{classification}]",
+            },
+            {"type": "filters.reprojection", "out_srs": target_srs},
+            {
+                "type": "writers.gdal",
+                "filename": str(output_tif),
+                "gdaldriver": "GTiff",
+                "resolution": resolution,
+                "output_type": "idw",
+                "window_size": 3,
+                "nodata": -9999,
+                "data_type": "float32",
+                "override_srs": target_srs,
+            },
+        ]
+    )
+    print("Rasterizing ground-classified LAZ points with PDAL...")
+    try:
+        pdal_pipeline = pdal.Pipeline(json.dumps({"pipeline": pipeline}))
+        point_count = pdal_pipeline.execute()
+    except RuntimeError as error:
+        raise RuntimeError(f"PDAL failed to create the terrain DEM: {error}") from error
+    if point_count == 0:
+        raise RuntimeError(
+            "PDAL found no points after ground processing and filtering for "
+            f"LAS classification {classification}. Try --lpc-ground-mode "
+            "smrf for unclassified data, or choose the appropriate "
+            "--lpc-classification for this project."
+        )
+    print(f"PDAL rasterized {point_count:,} ground points.")
+    if not output_tif.exists():
+        raise RuntimeError("PDAL completed without creating the terrain DEM.")
+    return output_tif
 
 
 def load_dependencies() -> tuple[Any, Any, Any]:
@@ -1155,7 +1561,18 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
     resolution_us_ft = args.meters_per_pixel * US_SURVEY_FEET_PER_METER
 
     print("Processing plan:")
-    print(f"  Input VRT: {args.vrt}")
+    if args.vrt:
+        print(f"  Input VRT: {args.vrt}")
+    else:
+        print(f"  USGS LPC project: {args.usgs_lpc_project}")
+        print(f"  LAZ cache: {Path(args.lpc_cache).resolve()}")
+        print(
+            "  Point-cloud preprocessing: classification "
+            f"{args.lpc_classification} -> bare-earth DEM via Python PDAL "
+            f"(ground mode: {args.lpc_ground_mode})"
+        )
+        if args.lpc_source_srs:
+            print(f"  Missing LAZ CRS fallback: {args.lpc_source_srs}")
     print(
         f"  Window: west={args.west}, north={args.north}, "
         f"east={args.east}, south={args.south} ({args.projwin_srs})"
@@ -1183,7 +1600,10 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
         f"{args.clip_level}"
     )
     print(f"  Final output: {output}")
-    print("  Execution: in-process osgeo.gdal + NumPy; no subprocesses")
+    if args.vrt:
+        print("  Execution: in-process osgeo.gdal + NumPy; no subprocesses")
+    else:
+        print("  Execution: in-process Python PDAL + GDAL + NumPy")
 
 
 def main() -> int:
@@ -1209,6 +1629,28 @@ def main() -> int:
         )
 
         with context:
+            source_input = args.vrt
+            if args.usgs_lpc_project:
+                source_input = str(
+                    create_lpc_dem(
+                        osr=osr,
+                        project_url=args.usgs_lpc_project,
+                        cache_root=Path(args.lpc_cache),
+                        output_tif=work_dir / f"{output.stem}-lpc-dem.tif",
+                        geographic_bounds=Bounds(
+                            west=args.west,
+                            north=args.north,
+                            east=args.east,
+                            south=args.south,
+                        ),
+                        metres_per_pixel=args.meters_per_pixel,
+                        classification=args.lpc_classification,
+                        source_srs=args.lpc_source_srs,
+                        ground_mode=args.lpc_ground_mode,
+                        metadata_workers=args.lpc_metadata_workers,
+                    )
+                )
+
             one_metre_tif = work_dir / f"{output.stem}-1m.tif"
             stretched_png = work_dir / f"{output.stem}-stretched.png"
             clipped_tif = work_dir / f"{output.stem}-clipped.tif"
@@ -1219,7 +1661,7 @@ def main() -> int:
             requested_width, requested_height, width, height = crop_and_resample(
                 gdal=gdal,
                 osr=osr,
-                source_vrt=args.vrt,
+                source_vrt=source_input,
                 output_tif=one_metre_tif,
                 west=args.west,
                 north=args.north,
