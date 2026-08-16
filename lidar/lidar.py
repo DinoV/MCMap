@@ -45,7 +45,7 @@ For example, the USGS 1/3-arc-second geographic GeoTIFF can be read remotely:
 
 Or downloading the 3m in a zip:
     python lidar.py \
-        --raster "/vsizip/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/19/IMG/ned19_n48x25_w122x75_wa_puget_sound_2000.zip/ned19_n48x25_w122x75_wa_puget_sound_2000.img" \ 
+        --raster "/vsizip/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/19/IMG/ned19_n48x25_w122x75_wa_puget_sound_2000.zip/ned19_n48x25_w122x75_wa_puget_sound_2000.img" \
         --west -122.7033389  --north 48.2275394 --east -122.6680931 --south 48.2073796 \
         --output coupeville-3m.png \
         --clip-level 100 \
@@ -95,7 +95,7 @@ DEFAULT_LAND_START = 8
 DEFAULT_WATER_INPUT_VALUE = 0
 DEFAULT_CHUNK_ROWS = 512
 DEFAULT_TILE_SIZE_PIXELS = 512
-OUTPUT_MAXIMUM = 180
+OUTPUT_MAXIMUM = 150
 
 # Older USGS legacy projects can omit the CRS from every LAZ header and can
 # contain only ASPRS class 1 (unclassified) points.  These project-level facts
@@ -207,10 +207,20 @@ def parse_args() -> argparse.Namespace:
     )
 
     bounds = parser.add_argument_group("geographic crop")
-    bounds.add_argument("--west", required=True, type=float, help="West longitude.")
-    bounds.add_argument("--north", required=True, type=float, help="North latitude.")
-    bounds.add_argument("--east", required=True, type=float, help="East longitude.")
-    bounds.add_argument("--south", required=True, type=float, help="South latitude.")
+    bounds.add_argument("--west", type=float, help="West longitude.")
+    bounds.add_argument("--north", type=float, help="North latitude.")
+    bounds.add_argument("--east", type=float, help="East longitude.")
+    bounds.add_argument("--south", type=float, help="South latitude.")
+    bounds.add_argument(
+        "--bounds",
+        nargs=4,
+        type=float,
+        metavar=("WEST", "NORTH", "EAST", "SOUTH"),
+        help=(
+            "Supply all crop coordinates at once as WEST NORTH EAST SOUTH. "
+            "Cannot be combined with the individual coordinate options."
+        ),
+    )
 
     parser.add_argument(
         "--projwin-srs",
@@ -222,11 +232,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--clip-level",
-        required=True,
+        default=100,
         type=int,
         help=(
-            "Minimum output value for non-water pixels, normally 60, 65, "
-            "or 100."
+            "Minimum output value for non-water pixels, defaults to 100 which is water in Worldpainter"
         ),
     )
     parser.add_argument(
@@ -253,6 +262,34 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_STRETCH_EXPONENT,
         help="Exponent for the automatic 8-bit stretch. Default: 0.42.",
+    )
+    parser.add_argument(
+        "--height-mode",
+        choices=("stretched", "absolute"),
+        default="absolute",
+        help=(
+            "'stretched' contrast-normalizes each map as before. 'absolute' "
+            "maps one vertical metre to one image value/Minecraft block. "
+            "Default: stretched."
+        ),
+    )
+    parser.add_argument(
+        "--minecraft-sea-level",
+        type=int,
+        default=61,
+        help=(
+            "Image value and Minecraft Y used for elevation zero in absolute "
+            "mode. Default: 61."
+        ),
+    )
+    parser.add_argument(
+        "--vertical-units",
+        choices=("auto", "meters", "us-survey-feet"),
+        default="auto",
+        help=(
+            "Units of source elevation samples in absolute mode. Auto detects "
+            "a vertical CRS and otherwise assumes metres. Default: auto."
+        ),
     )
     parser.add_argument(
         "--stretch-scope",
@@ -375,6 +412,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    individual_bounds = (args.west, args.north, args.east, args.south)
+    if args.bounds is not None:
+        if any(value is not None for value in individual_bounds):
+            raise ValueError(
+                "--bounds cannot be combined with --west, --north, --east, "
+                "or --south."
+            )
+        args.west, args.north, args.east, args.south = args.bounds
+    elif any(value is None for value in individual_bounds):
+        raise ValueError(
+            "Supply either --bounds WEST NORTH EAST SOUTH or all four of "
+            "--west, --north, --east, and --south."
+        )
+
     if not args.west < args.east:
         raise ValueError("--west must be less than --east.")
     if not args.south < args.north:
@@ -389,6 +440,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--water-value and --land-start must differ.")
     if args.exponent <= 0.0:
         raise ValueError("--exponent must be greater than zero.")
+    if not 0 <= args.minecraft_sea_level <= 255:
+        raise ValueError("--minecraft-sea-level must be between 0 and 255.")
     if (args.scale_min is None) != (args.scale_max is None):
         raise ValueError("--scale-min and --scale-max must be supplied together.")
     if args.scale_min is not None:
@@ -1053,7 +1106,8 @@ def crop_and_resample(
     metres_per_pixel: float,
     tile_size: int,
     resampling: str,
-) -> tuple[int, int, int, int]:
+    vertical_units: str,
+) -> tuple[int, int, int, int, float, str]:
     """Crop and resample while anchoring the literal input northwest point.
 
     A longitude/latitude rectangle generally becomes a slightly rotated or
@@ -1091,6 +1145,25 @@ def crop_and_resample(
                 "system."
             )
         set_traditional_axis_order(osr, source_srs)
+
+        if vertical_units == "meters":
+            vertical_metres_per_unit = 1.0
+            vertical_unit_label = "metres (explicit)"
+        elif vertical_units == "us-survey-feet":
+            vertical_metres_per_unit = 1.0 / US_SURVEY_FEET_PER_METER
+            vertical_unit_label = "US survey feet (explicit)"
+        else:
+            vertical_unit_name = source_srs.GetAttrValue("VERT_CS|UNIT") or ""
+            if "foot" in vertical_unit_name.lower() or "feet" in vertical_unit_name.lower():
+                vertical_metres_per_unit = 1.0 / US_SURVEY_FEET_PER_METER
+                vertical_unit_label = f"{vertical_unit_name} (from vertical CRS)"
+            else:
+                vertical_metres_per_unit = 1.0
+                vertical_unit_label = (
+                    f"{vertical_unit_name} (from vertical CRS)"
+                    if vertical_unit_name
+                    else "metres (assumed; source has no vertical CRS)"
+                )
 
         target_srs = osr.SpatialReference()
         if target_srs.ImportFromEPSG(6597) != 0:
@@ -1183,6 +1256,7 @@ def crop_and_resample(
         )
         source_label, _ = spatial_reference_identity(source_srs)
         print(f"  Input raster CRS:          {source_label}")
+        print(f"  Source elevation units:    {vertical_unit_label}")
         print(f"  Requested size: {requested_width} x {requested_height}")
         print(f"  Aligned size:   {aligned_width} x {aligned_height}")
         print(
@@ -1286,7 +1360,14 @@ def crop_and_resample(
         result = None
         source = None
 
-    return requested_width, requested_height, width, height
+    return (
+        requested_width,
+        requested_height,
+        width,
+        height,
+        vertical_metres_per_unit,
+        vertical_unit_label,
+    )
 
 
 def compute_stretch_range(
@@ -1433,6 +1514,99 @@ def stretch_to_byte_png(
         source = None
 
 
+def map_absolute_elevation_to_byte(
+    *,
+    gdal: Any,
+    np: Any,
+    source_tif: Path,
+    output_tif: Path,
+    minecraft_sea_level: int,
+    vertical_metres_per_unit: float,
+    chunk_rows: int,
+) -> tuple[float, float, int, int]:
+    """Encode absolute elevation so one metre equals one grayscale step."""
+
+    print("\nStage 2/4: mapping absolute elevation at one metre per block")
+    source = gdal.Open(str(source_tif), gdal.GA_ReadOnly)
+    if source is None:
+        raise RuntimeError(f"GDAL could not open the resampled TIFF: {source_tif}")
+    source_band = source.GetRasterBand(1)
+    if source_band is None:
+        source = None
+        raise RuntimeError("The resampled TIFF does not contain raster band 1.")
+
+    width = source.RasterXSize
+    height = source.RasterYSize
+    driver = gdal.GetDriverByName("GTiff")
+    destination = driver.Create(
+        str(output_tif), width, height, 1, gdal.GDT_Byte,
+        options=["TILED=YES", "COMPRESS=DEFLATE", "PREDICTOR=2"],
+    )
+    if destination is None:
+        source = None
+        raise RuntimeError(f"GDAL could not create the absolute-height TIFF: {output_tif}")
+
+    no_data = source_band.GetNoDataValue()
+    minimum = float("inf")
+    maximum = float("-inf")
+    clipped_low = 0
+    clipped_high = 0
+    next_report = 0
+    try:
+        copy_spatial_reference(source, destination)
+        destination_band = destination.GetRasterBand(1)
+        destination_band.SetColorInterpretation(gdal.GCI_GrayIndex)
+        for y_offset in range(0, height, chunk_rows):
+            rows = min(chunk_rows, height - y_offset)
+            values = source_band.ReadAsArray(0, y_offset, width, rows)
+            if values is None:
+                raise RuntimeError(
+                    f"GDAL failed reading rows {y_offset} through "
+                    f"{y_offset + rows - 1}."
+                )
+
+            valid = np.isfinite(values)
+            if no_data is not None:
+                valid &= values != no_data
+            elevations = values.astype(np.float64) * vertical_metres_per_unit
+            if np.any(valid):
+                valid_elevations = elevations[valid]
+                minimum = min(minimum, float(valid_elevations.min()))
+                maximum = max(maximum, float(valid_elevations.max()))
+
+            mapped = elevations + float(minecraft_sea_level)
+            clipped_low += int(np.count_nonzero(valid & (mapped < 0.0)))
+            clipped_high += int(np.count_nonzero(valid & (mapped > 255.0)))
+            np.clip(mapped, 0.0, 255.0, out=mapped)
+            # USGS terrain DEMs commonly mark open water as NoData. Treat it
+            # as elevation zero so WorldPainter fills it at the configured
+            # sea level instead of creating a deep void at image value zero.
+            mapped[~valid] = float(minecraft_sea_level)
+            error_code = destination_band.WriteArray(
+                np.rint(mapped).astype(np.uint8), 0, y_offset
+            )
+            if error_code not in (None, 0):
+                raise RuntimeError(
+                    f"GDAL failed writing rows {y_offset} through "
+                    f"{y_offset + rows - 1}; error code {error_code}."
+                )
+
+            percent = int(((y_offset + rows) / height) * 100.0)
+            if percent >= next_report or percent == 100:
+                print(f"\rAbsolute height: {percent:3d}%", end="", flush=True)
+                next_report = ((percent // 5) + 1) * 5
+        print()
+        destination_band.FlushCache()
+        destination.FlushCache()
+    finally:
+        destination = None
+        source = None
+
+    if minimum == float("inf"):
+        raise RuntimeError("The aligned raster contains no valid elevations.")
+    return minimum, maximum, clipped_low, clipped_high
+
+
 def apply_land_floor(
     *,
     gdal: Any,
@@ -1502,7 +1676,7 @@ def apply_land_floor(
                     f"{y_offset + rows - 1}."
                 )
 
-            water_mask = values == water_value
+            water_mask = values <= water_value
             output_values = (
                 clip_level
                 + (values.astype(np.float32) - float(land_start)) * scale
@@ -1625,19 +1799,28 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
         "keep the literal input northwest coordinate fixed and expand "
         "east and south only"
     )
-    print(f"  Stretch exponent: {args.exponent:g}")
-    if args.scale_min is not None:
+    print(f"  Height mode: {args.height_mode}")
+    if args.height_mode == "absolute":
         print(
-            f"  Stretch range: explicit {args.scale_min:g} through "
-            f"{args.scale_max:g}"
+            "  Vertical mapping: one source metre = one image value = "
+            "one Minecraft block"
         )
+        print(f"  Real elevation 0 maps to Minecraft Y: {args.minecraft_sea_level}")
+        print(f"  Source vertical units: {args.vertical_units}")
     else:
-        print(f"  Stretch statistics scope: {args.stretch_scope}")
-    print(f"  Water value preserved: {args.water_value}")
-    print(
-        f"  Non-water values through {args.land_start} become: "
-        f"{args.clip_level}"
-    )
+        print(f"  Stretch exponent: {args.exponent:g}")
+        if args.scale_min is not None:
+            print(
+                f"  Stretch range: explicit {args.scale_min:g} through "
+                f"{args.scale_max:g}"
+            )
+        else:
+            print(f"  Stretch statistics scope: {args.stretch_scope}")
+        print(f"  Water value preserved: {args.water_value}")
+        print(
+            f"  Non-water values through {args.land_start} become: "
+            f"{args.clip_level}"
+        )
     print(f"  Final output: {output}")
     if args.vrt:
         print("  Execution: in-process osgeo.gdal + NumPy; no subprocesses")
@@ -1697,7 +1880,14 @@ def main() -> int:
             for intermediate in (one_metre_tif, stretched_png, clipped_tif):
                 remove_dataset_files(intermediate)
 
-            requested_width, requested_height, width, height = crop_and_resample(
+            (
+                requested_width,
+                requested_height,
+                width,
+                height,
+                vertical_metres_per_unit,
+                vertical_unit_label,
+            ) = crop_and_resample(
                 gdal=gdal,
                 osr=osr,
                 source_vrt=source_input,
@@ -1710,6 +1900,7 @@ def main() -> int:
                 metres_per_pixel=args.meters_per_pixel,
                 tile_size=args.tile_size,
                 resampling=args.resampling,
+                vertical_units=args.vertical_units,
             )
 
             map_bounds = read_map_bounds(
@@ -1718,52 +1909,67 @@ def main() -> int:
                 raster_path=one_metre_tif,
             )
 
-            if args.scale_min is not None:
-                minimum = float(args.scale_min)
-                maximum = float(args.scale_max)
-                print(
-                    "\nUsing the explicit stretch range: "
-                    f"{minimum:g} through {maximum:g}"
+            clipped_low = 0
+            clipped_high = 0
+            if args.height_mode == "absolute":
+                minimum, maximum, clipped_low, clipped_high = (
+                    map_absolute_elevation_to_byte(
+                        gdal=gdal,
+                        np=np,
+                        source_tif=one_metre_tif,
+                        output_tif=clipped_tif,
+                        minecraft_sea_level=args.minecraft_sea_level,
+                        vertical_metres_per_unit=vertical_metres_per_unit,
+                        chunk_rows=args.chunk_rows,
+                    )
                 )
             else:
-                if args.stretch_scope == "requested":
-                    statistics_width = requested_width
-                    statistics_height = requested_height
-                    statistics_label = "the original requested window"
+                if args.scale_min is not None:
+                    minimum = float(args.scale_min)
+                    maximum = float(args.scale_max)
+                    print(
+                        "\nUsing the explicit stretch range: "
+                        f"{minimum:g} through {maximum:g}"
+                    )
                 else:
-                    statistics_width = width
-                    statistics_height = height
-                    statistics_label = "the full 512-aligned raster"
+                    if args.stretch_scope == "requested":
+                        statistics_width = requested_width
+                        statistics_height = requested_height
+                        statistics_label = "the original requested window"
+                    else:
+                        statistics_width = width
+                        statistics_height = height
+                        statistics_label = "the full 512-aligned raster"
 
-                minimum, maximum = compute_stretch_range(
+                    minimum, maximum = compute_stretch_range(
+                        gdal=gdal,
+                        np=np,
+                        source_tif=one_metre_tif,
+                        width=statistics_width,
+                        height=statistics_height,
+                        chunk_rows=args.chunk_rows,
+                        label=statistics_label,
+                    )
+
+                stretch_to_byte_png(
                     gdal=gdal,
-                    np=np,
                     source_tif=one_metre_tif,
-                    width=statistics_width,
-                    height=statistics_height,
-                    chunk_rows=args.chunk_rows,
-                    label=statistics_label,
+                    output_png=stretched_png,
+                    exponent=args.exponent,
+                    minimum=minimum,
+                    maximum=maximum,
                 )
 
-            stretch_to_byte_png(
-                gdal=gdal,
-                source_tif=one_metre_tif,
-                output_png=stretched_png,
-                exponent=args.exponent,
-                minimum=minimum,
-                maximum=maximum,
-            )
-
-            apply_land_floor(
-                gdal=gdal,
-                np=np,
-                source_png=stretched_png,
-                output_tif=clipped_tif,
-                clip_level=args.clip_level,
-                land_start=args.land_start,
-                water_value=args.water_value,
-                chunk_rows=args.chunk_rows,
-            )
+                apply_land_floor(
+                    gdal=gdal,
+                    np=np,
+                    source_png=stretched_png,
+                    output_tif=clipped_tif,
+                    clip_level=args.clip_level,
+                    land_start=args.land_start,
+                    water_value=args.water_value,
+                    chunk_rows=args.chunk_rows,
+                )
 
             create_final_png(
                 gdal=gdal,
@@ -1776,7 +1982,23 @@ def main() -> int:
                 f"  Requested crop size: {requested_width} x {requested_height}"
             )
             print(f"  Final aligned size:  {width} x {height}")
-            print(f"  Source elevation range: {minimum:g} through {maximum:g}")
+            if args.height_mode == "absolute":
+                print(
+                    f"  Source elevation range: {minimum:g} through "
+                    f"{maximum:g} metres"
+                )
+                print(f"  Detected source units: {vertical_unit_label}")
+                print(
+                    "  Absolute mapping: Minecraft Y = round(elevation metres + "
+                    f"{args.minecraft_sea_level})"
+                )
+                if clipped_low or clipped_high:
+                    print(
+                        f"  Warning: {clipped_low} pixels clipped below Y 0 and "
+                        f"{clipped_high} pixels clipped above Y 255"
+                    )
+            else:
+                print(f"  Source elevation range: {minimum:g} through {maximum:g}")
             print(f"  Output: {output}")
             if args.keep_intermediates:
                 print(f"  Intermediate files: {work_dir}")
