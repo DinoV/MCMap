@@ -10,18 +10,14 @@ using static MinecraftMapper.OsmReader;
 namespace MinecraftMapper {
     partial class Mapper {
         static int Main(string[] args) {
-            string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\Hackathon";
-            //string map = @"C:\Users\dino_\AppData\Roaming\.minecraft\saves\SeattleCentralDistrict";
-
-            string log = null;
-            //string osmData = @"C:\Users\dino_\Downloads\SeattleTargetted.osm";
-            string osmData = @"C:\Users\dino_\Downloads\SeattleCDMini.osm";
+            string map = null, osmData = null, log = null;
             List<long> buildings = new List<long>();
             List<long> roads = new List<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
             double? upperLeftEastingUsFt = null, upperLeftNorthingUsFt = null;
             int mcX = 0, mcZ = 0;
             foreach (var arg in args) {
+                Console.WriteLine(arg);
                 if (arg == "/?" || arg == "/help") {
                     Help();
                     return 0;
@@ -70,14 +66,22 @@ namespace MinecraftMapper {
             if (map == null) {
                 Console.WriteLine("map required");
                 return 1;
-            }
-            var world = NbtWorld.Open(map);
-            Console.WriteLine(world);
-
-            if (!upperLeftNorthingUsFt.HasValue || !upperLeftNorthingUsFt.HasValue) {
+            } else if (osmData == null) {
+                Console.WriteLine("osm data required");
+                return 1;
+            } else if (!upperLeftNorthingUsFt.HasValue || !upperLeftNorthingUsFt.HasValue) {
                 Console.WriteLine("Bounds need to be provided");
                 return 1;
             }
+
+            NbtWorld world;
+            try {
+                world = NbtWorld.Open(map);
+            } catch (Exception e) {
+                Console.WriteLine("Failed to open world {0}: {1}", map, e.Message);
+                return 1;
+            }
+
             var mapper = new Mapper(log, map, osmData, upperLeftEastingUsFt.Value, upperLeftNorthingUsFt.Value,
                 mcX, mcZ, buildings.ToArray(), roads.ToArray());
             mapper.MapIt();

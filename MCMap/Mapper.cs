@@ -73,29 +73,6 @@ namespace MinecraftMapper {
                     worldMaxX, worldMaxZ, upperLeftEastingUsFt, upperLeftNorthingUsFt,
                     mcX, mcZ);
             _reader = new OsmReader(osmXml);
-            /*
-            HashSet<BlockPosition> buildingPoints = new HashSet<BlockPosition>();
-            DrawBuilding(
-                new OsmReader.Building("Test", "1234", "main St", OsmReader.Amenity.None, OsmReader.Material.None,
-                new OsmReader.RoofInfo(OsmReader.RoofType.Gabled, null, null, null, null, false),
-                new OsmReader.Node[] {
-                    new OsmReader.Node(47.6922268, -122.3524505),
-                    new OsmReader.Node(47.6922699, -122.3524514),
-                    new OsmReader.Node(47.6922701, -122.3524313),
-                    new OsmReader.Node(47.6923199, -122.3524323),
-                    new OsmReader.Node(47.6923204, -122.3523824),
-                    new OsmReader.Node(47.6923272, -122.3523825),
-                    new OsmReader.Node(47.6923275, -122.3523532),
-                    new OsmReader.Node(47.6923192, -122.3523531),
-                    new OsmReader.Node(47.6923196, -122.3523109),
-                    new OsmReader.Node(47.6922282, -122.3523090),
-                    new OsmReader.Node(47.6922268, -122.3524505),
-
-                }),
-                buildingPoints,
-                1
-            );
-            _world.Save();*/
         }
 
         private void WriteLine(object msg) {
@@ -136,15 +113,18 @@ namespace MinecraftMapper {
         }
 
         public void MapIt() {
-            //Save();
             DateTime startTime = DateTime.Now;
             _reader.ReadData();
             GC.Collect();
             DateTime dataProcessing = DateTime.Now;
-            var residential = new CsvReader(new StreamReader("residential.csv"));
-            ReadStories(residential, "Stories");
-            var commercial = new CsvReader(new StreamReader("commercial.csv"));
-            ReadStories(commercial, "NbrStories");
+            if (File.Exists("residential.csv")) {
+                var residential = new CsvReader(new StreamReader("residential.csv"));
+                ReadStories(residential, "Stories");
+            }
+            if (File.Exists("commercial.csv")) {
+                var commercial = new CsvReader(new StreamReader("commercial.csv"));
+                ReadStories(commercial, "NbrStories");
+            }
             _reader.BuildingsByAddress.Clear();
             try {
                 WriteLine("{0} roads", _reader.Ways.Count);
