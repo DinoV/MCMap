@@ -25,7 +25,7 @@ requires PDAL's Python bindings. Run the script from an environment containing
 GDAL's Python bindings and NumPy, for example:
 
     python lidar.py \
-        --vrt WA_KingCo_1_2021.vrt \
+        --input WA_KingCo_1_2021.vrt \
         --west -122.3539083 --north 47.5558653 \
         --east -122.2837235 --south 47.4723506 \
         --output duwamish-larger.png \
@@ -33,19 +33,19 @@ GDAL's Python bindings and NumPy, for example:
 
 Raster input may use any CRS understood by GDAL. It is reprojected to EPSG:6597
 before the literal northwest anchor, one-metre grid, and 512-pixel alignment
-are applied. ``--raster`` and the legacy name ``--vrt`` are aliases.
+are applied. Supply the GDAL-readable source with ``--input``.
 
 For example, the USGS 1/3-arc-second geographic GeoTIFF can be read remotely:
 
     python lidar.py \
-        --raster "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n49w123/USGS_13_n49w123_20240327.tif" \
+        --input "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/historical/n49w123/USGS_13_n49w123_20240327.tif" \
         --west -122.7033389 --north 48.2275394 \
         --east -122.6680931 --south 48.2073796 \
         --output coupeville-10m.png --clip-level 100 --overwrite
 
 Or downloading the 3m in a zip:
     python lidar.py \
-        --raster "/vsizip/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/19/IMG/ned19_n48x25_w122x75_wa_puget_sound_2000.zip/ned19_n48x25_w122x75_wa_puget_sound_2000.img" \
+        --input "/vsizip/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/19/IMG/ned19_n48x25_w122x75_wa_puget_sound_2000.zip/ned19_n48x25_w122x75_wa_puget_sound_2000.img" \
         --west -122.7033389  --north 48.2275394 --east -122.6680931 --south 48.2073796 \
         --output coupeville-3m.png \
         --clip-level 100 \
@@ -184,9 +184,7 @@ def parse_args() -> argparse.Namespace:
 
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
-        "--vrt",
-        "--raster",
-        dest="vrt",
+        "--input",
         help=(
             "Input raster filename, URL, or GDAL /vsi path. Any "
             "GDAL-readable CRS is reprojected to EPSG:6597."
@@ -466,11 +464,11 @@ def validate_args(args: argparse.Namespace) -> None:
             f"Output already exists: {output}. Use --overwrite to replace it."
         )
 
-    if args.vrt:
-        vrt = args.vrt
-        is_virtual_path = vrt.startswith("/vsi") or "://" in vrt
-        if not is_virtual_path and not Path(vrt).exists():
-            raise FileNotFoundError(f"Input VRT does not exist: {vrt}")
+    if args.input:
+        input_path = args.input
+        is_virtual_path = input_path.startswith("/vsi") or "://" in input_path
+        if not is_virtual_path and not Path(input_path).exists():
+            raise FileNotFoundError(f"Input raster does not exist: {input_path}")
 
 
 def normalize_usgs_lpc_project_url(url: str) -> tuple[str, str]:
@@ -1096,7 +1094,7 @@ def crop_and_resample(
     *,
     gdal: Any,
     osr: Any,
-    source_vrt: str,
+    source_input: str,
     output_tif: Path,
     west: float,
     north: float,
@@ -1125,9 +1123,9 @@ def crop_and_resample(
 
     print("\nStage 1/4: reprojecting, cropping, aligning, and resampling")
 
-    source = gdal.OpenEx(source_vrt, gdal.OF_RASTER | gdal.OF_READONLY)
+    source = gdal.OpenEx(source_input, gdal.OF_RASTER | gdal.OF_READONLY)
     if source is None:
-        raise RuntimeError(f"GDAL could not open the input raster: {source_vrt}")
+        raise RuntimeError(f"GDAL could not open the input raster: {source_input}")
 
     result = None
     try:
@@ -1773,8 +1771,8 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
     resolution_us_ft = args.meters_per_pixel * US_SURVEY_FEET_PER_METER
 
     print("Processing plan:")
-    if args.vrt:
-        print(f"  Input raster: {args.vrt}")
+    if args.input:
+        print(f"  Input raster: {args.input}")
     else:
         print(f"  USGS LPC project: {args.usgs_lpc_project}")
         print(f"  LAZ cache: {Path(args.lpc_cache).resolve()}")
@@ -1822,7 +1820,7 @@ def print_plan(args: argparse.Namespace, output: Path) -> None:
             f"{args.clip_level}"
         )
     print(f"  Final output: {output}")
-    if args.vrt:
+    if args.input:
         print("  Execution: in-process osgeo.gdal + NumPy; no subprocesses")
     else:
         print("  Execution: in-process Python PDAL + GDAL + NumPy")
@@ -1851,7 +1849,7 @@ def main() -> int:
         )
 
         with context:
-            source_input = args.vrt
+            source_input = args.input
             if args.usgs_lpc_project:
                 source_input = str(
                     create_lpc_dem(
@@ -1890,7 +1888,7 @@ def main() -> int:
             ) = crop_and_resample(
                 gdal=gdal,
                 osr=osr,
-                source_vrt=source_input,
+                source_input=source_input,
                 output_tif=one_metre_tif,
                 west=args.west,
                 north=args.north,
