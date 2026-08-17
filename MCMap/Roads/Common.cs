@@ -109,12 +109,10 @@ namespace MinecraftMapper {
             // at once.  Once a road is entirely processed we'll process it's intersections and draw them on.
             // We order by a position on the map to handle very large maps - this allows us to be reading/writing
             // in approximately the same area and to avoid lots of additional reads/writes.
-            IEnumerable<IGrouping<string, OsmReader.Way>> roads;
-            if (_roads.Length != 0) {
-                roads = _reader.Ways.Where(x => _roads.Contains(x.Key)).Select(x => x.Value).GroupBy(x => x.Name ?? "").OrderBy(x => MapOrder(_conv, x.First().Nodes.First()));
-            } else {
-                roads = _reader.Ways.Values.GroupBy(x => x.Name ?? "").OrderBy(x => MapOrder(_conv, x.First().Nodes.First()));
-            }
+            IEnumerable<IGrouping<string, OsmReader.Way>> roads =
+                _reader.Ways.Values
+                    .GroupBy(x => x.Name ?? "")
+                    .OrderBy(x => MapOrder(_conv, x.First().Nodes.First()));
             var roadPoints = new Dictionary<BlockPosition, RoadPoint>();
             //var intersections = new Dictionary<RoadIntersection, List<BlockPosition>>();
             //var roads = new[] { reader.Ways[6358491], reader.Ways[6358495], reader.Ways[158718178], reader.Ways[241283900], reader.Ways[6433374] };

@@ -13,17 +13,14 @@ namespace MinecraftMapper {
         private readonly PositionConverter _conv;
         private readonly OsmReader _reader;
         private readonly AnvilBlockManager _bm;
-        private readonly long[] _buildings, _roads;
         private readonly StreamWriter _log;
         private readonly bool _dryRun = false;
 
         public Mapper(string log, string world, string osmXml,
                 double upperLeftEastingUsFt, double upperLeftNorthingUsFt,
                 int mcX, int mcZ,
-                long[] buildings, long[] roads, bool dryrun) {
+                HashSet<long> ways, bool dryrun) {
             _world = NbtWorld.Open(world);
-            _buildings = buildings;
-            _roads = roads;
             _bm = _world.GetBlockManager() as AnvilBlockManager;
             _bm.AutoLight = true;
             if (log != null) {
@@ -72,7 +69,7 @@ namespace MinecraftMapper {
             _conv = PositionConverter.FromProjectedRasterOrigin(
                     worldMaxX, worldMaxZ, upperLeftEastingUsFt, upperLeftNorthingUsFt,
                     mcX, mcZ);
-            _reader = new OsmReader(osmXml);
+            _reader = new OsmReader(osmXml, ways);
         }
 
         private void WriteLine(object msg) {
@@ -129,17 +126,15 @@ namespace MinecraftMapper {
             try {
                 WriteLine("{0} roads", _reader.Ways.Count);
 
-                if (_roads.Length == 0) {
-                    DrawCoastlines();
+                DrawCoastlines();
 
-                    DrawPiers();
+                DrawPiers();
 
-                    DrawLandUses();
+                DrawLandUses();
 
-                    DrawLeisures();
+                DrawLeisures();
 
-                    DrawParkingLots();
-                }
+                DrawParkingLots();
 
                 var roadPoints = DrawRoads();
 

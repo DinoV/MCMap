@@ -11,8 +11,7 @@ namespace MinecraftMapper {
     partial class Mapper {
         static int Main(string[] args) {
             string map = null, osmData = null, log = null;
-            List<long> buildings = new List<long>();
-            List<long> roads = new List<long>();
+            HashSet<long> ways = new HashSet<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
             double? upperLeftEastingUsFt = null, upperLeftNorthingUsFt = null;
             int mcX = 0, mcZ = 0;
@@ -29,20 +28,13 @@ namespace MinecraftMapper {
                     map = arg.Substring("/map:".Length);
                 } else if (arg.StartsWith("/osm:")) {
                     osmData = arg.Substring("/osm:".Length);
-                } else if (arg.StartsWith("/building:")) {
-                    long building;
-                    if (!long.TryParse(arg.Substring("/building:".Length), out building)) {
-                        Console.WriteLine("Bad building ID: " + arg.Substring("/building:".Length));
+                } else if (arg.StartsWith("/way:")) {
+                    long way;
+                    if (!long.TryParse(arg.Substring("/way:".Length), out way)) {
+                        Console.WriteLine("Bad way ID: " + arg.Substring("/way:".Length));
                         return 1;
                     }
-                    buildings.Add(building);
-                } else if (arg.StartsWith("/road:")) {
-                    long road;
-                    if (!long.TryParse(arg.Substring("/road:".Length), out road)) {
-                        Console.WriteLine("Bad road ID: " + arg.Substring("/road:".Length));
-                        return 1;
-                    }
-                    roads.Add(road);
+                    ways.Add(way);
                 } else if (arg.StartsWith("/pos:")) {
                     var coords = arg.Substring("/pos:".Length).Split(',');
                     double parsedNorth, parsedWest;
@@ -85,7 +77,7 @@ namespace MinecraftMapper {
             }
 
             var mapper = new Mapper(log, map, osmData, upperLeftEastingUsFt.Value, upperLeftNorthingUsFt.Value,
-                mcX, mcZ, buildings.ToArray(), roads.ToArray(), dryrun);
+                mcX, mcZ, ways, dryrun);
             mapper.MapIt();
             return 0;
         }
@@ -97,8 +89,7 @@ namespace MinecraftMapper {
             Console.WriteLine(" /osm:<osm.xml>                - Specifies path to Open Street Map .xml file");
             Console.WriteLine(" /pos:<west>,<north>           - Specifies the projected bounds (west, north) outputted from lidar.py");
             Console.WriteLine(" /offset:X,Z                   - Provides an extra offset in Minecraft blocks that's applied from the lat,long");
-            Console.WriteLine(" /building:<osmWay>            - Limit buildings to be drawn, multiple can be specified");
-            Console.WriteLine(" /road:<osmWay>                - Limit roads to be drawn, multiple can be specified");
+            Console.WriteLine(" /way:<osmWay>                 - Limit rendering to these OSM ways; may be repeated");
         }
 
         enum Direction {

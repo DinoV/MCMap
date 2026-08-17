@@ -24,9 +24,11 @@ namespace MinecraftMapper {
         public readonly List<CoastlineInfo> Coastlines = new List<CoastlineInfo>();
         public readonly List<PierInfo> Piers = new List<PierInfo>();
         private readonly string _sourceXml;
+        private readonly HashSet<long> _ways;
   
-        public OsmReader(string sourceXml) {
+        public OsmReader(string sourceXml, HashSet<long> ways) {
             _sourceXml = sourceXml;
+            _ways = ways ?? new HashSet<long>();
         }
 
         public class Node {
@@ -421,6 +423,11 @@ namespace MinecraftMapper {
                         } 
                         break;
                     case "way":
+                        long osmWayId = Convert.ToInt64(data.Attribute("id").Value);
+                        if (_ways.Count != 0 && !_ways.Contains(osmWayId)) {
+                            break;
+                        }
+
                         List<Node> nodes = new List<Node>();
                         foreach (var node in data.Descendants()) {
                             switch (node.Name.LocalName) {
