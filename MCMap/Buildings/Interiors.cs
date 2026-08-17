@@ -16,7 +16,11 @@ namespace MinecraftMapper {
             new BlockPosition(0, -1),
         };
 
-        private HashSet<BlockPosition> DrawBuildingFloor(int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Dictionary<BlockPosition, int> buildingPoints, OsmReader.Building building, int buildingHeight, HashSet<BlockPosition> doors, out int avgHeight) {
+        private HashSet<BlockPosition> DrawBuildingFloor(int top, int left, int bottom,
+                int right, Dictionary<BlockPosition, int> baseHeights,
+                Dictionary<BlockPosition, int> buildingPoints, OsmReader.Building building,
+                int buildingHeight, HashSet<BlockPosition> doors, int? fixedFloorHeight,
+                out int avgHeight) {
             int storyCount = buildingHeight / (defaultWindowHeight + defaultWindowSpacing); // matching current values in 
             int blockType = 0, blockData = 0;
             switch (building.Id % 14) {
@@ -55,8 +59,19 @@ namespace MinecraftMapper {
                 }
             }
 
+            if (fixedFloorHeight.HasValue) {
+                avgHeight = fixedFloorHeight.Value;
+                minHeight = avgHeight;
+                maxHeight = avgHeight;
+            }
+
             foreach (var point in floorPoints) {
-                var height = GetHeight(point);
+                bool overWater = fixedFloorHeight.HasValue && IsWaterSurface(point);
+                var height = fixedFloorHeight ?? GetHeight(point);
+
+                if (overWater && IsBuildingSupportLocation(point)) {
+                    DrawBuildingSupport(point, height);
+                }
 
                 // Smooth out building interiors somewhat...
                 if (maxHeight - minHeight <= 2) {

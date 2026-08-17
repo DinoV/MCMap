@@ -22,6 +22,7 @@ namespace MinecraftMapper {
         public readonly List<LandInfo> LandUses = new List<LandInfo>();
         public readonly List<LeisureInfo> Leisures = new List<LeisureInfo>();
         public readonly List<CoastlineInfo> Coastlines = new List<CoastlineInfo>();
+        public readonly List<PierInfo> Piers = new List<PierInfo>();
         private readonly string _sourceXml;
   
         public OsmReader(string sourceXml) {
@@ -533,6 +534,9 @@ namespace MinecraftMapper {
                         } else if (tags.coastline) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             Coastlines.Add(new CoastlineInfo(wayId, nodes.ToArray()));
+                        } else if (tags.pier) {
+                            var wayId = Convert.ToInt64(data.Attribute("id").Value);
+                            Piers.Add(new PierInfo(wayId, nodes.ToArray(), tags.floating));
                         } else if (tags.landUse != LandUse.None) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             LandUses.Add(new LandInfo(wayId, tags.landUse, nodes.ToArray()));
@@ -564,6 +568,18 @@ namespace MinecraftMapper {
             public CoastlineInfo(long wayId, Node[] nodes) {
                 WayId = wayId;
                 Nodes = nodes;
+            }
+        }
+
+        internal class PierInfo {
+            public readonly long WayId;
+            public readonly Node[] Nodes;
+            public readonly bool Floating;
+
+            public PierInfo(long wayId, Node[] nodes, bool floating) {
+                WayId = wayId;
+                Nodes = nodes;
+                Floating = floating;
             }
         }
 
@@ -756,6 +772,8 @@ namespace MinecraftMapper {
             public Leisure leisuire;
             public RailType railType;
             public bool coastline;
+            public bool pier;
+            public bool floating;
         }
 
         public enum Parking {
@@ -828,6 +846,12 @@ namespace MinecraftMapper {
                     break;
                 case "natural":
                     tagInfo.coastline = value == "coastline";
+                    break;
+                case "man_made":
+                    tagInfo.pier = value == "pier";
+                    break;
+                case "floating":
+                    tagInfo.floating = value == "yes";
                     break;
                 case "direction":
                     int dir;

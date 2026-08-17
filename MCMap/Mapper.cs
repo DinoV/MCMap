@@ -20,7 +20,7 @@ namespace MinecraftMapper {
         public Mapper(string log, string world, string osmXml,
                 double upperLeftEastingUsFt, double upperLeftNorthingUsFt,
                 int mcX, int mcZ,
-                long[] buildings, long[] roads) {
+                long[] buildings, long[] roads, bool dryrun) {
             _world = NbtWorld.Open(world);
             _buildings = buildings;
             _roads = roads;
@@ -131,6 +131,8 @@ namespace MinecraftMapper {
 
                 if (_roads.Length == 0) {
                     DrawCoastlines();
+
+                    DrawPiers();
 
                     DrawLandUses();
 

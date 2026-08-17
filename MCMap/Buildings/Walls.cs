@@ -9,9 +9,12 @@ using static MinecraftMapper.OsmReader;
 
 namespace MinecraftMapper {
     partial class Mapper {
-        private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building, Dictionary<BlockPosition, int> buildingPoints, int blockType, int data, int buildingHeight, int maxHeight) {
+        private Dictionary<BlockPosition, int> DrawBuildingWalls(OsmReader.Building building,
+                Dictionary<BlockPosition, int> buildingPoints, int blockType, int data,
+                int buildingHeight, int maxHeight, out bool extendsOverWater) {
             var start = building.BuildingNodes[0];
             var baseHeights = new Dictionary<BlockPosition, int>();
+            extendsOverWater = false;
             for (int i = 1; i < building.BuildingNodes.Length; i++) {
                 var from = _conv.ToBlock(start.Lat, start.Long);
                 var to = _conv.ToBlock(building.BuildingNodes[i].Lat, building.BuildingNodes[i].Long);
@@ -22,10 +25,18 @@ namespace MinecraftMapper {
                     }
                     // if we have duplicate entries for a building don't draw it twice...
 
+                    bool overWater = IsWaterSurface(point.Block);
+                    extendsOverWater |= overWater;
                     int height;
                     if (!buildingPoints.TryGetValue(point.Block, out height)) {
-                        height = GetHeight(point.Block);
+                        height = overWater
+                            ? maxHeight
+                            : GetBuildingBaseHeight(point.Block);
                         buildingPoints[point.Block] = height;
+                    }
+
+                    if (overWater && IsBuildingSupportLocation(point.Block)) {
+                        DrawBuildingSupport(point.Block, maxHeight);
                     }
 
                     baseHeights[point.Block] = height;
@@ -42,6 +53,25 @@ namespace MinecraftMapper {
                 start = building.BuildingNodes[i];
             }
             return baseHeights;
+        }
+
+        private bool IsWaterSurface(BlockPosition point) {
+            int surfaceHeight = GetHeight(point);
+            int id = _bm.GetID(point.X, surfaceHeight, point.Z);
+            return id == BlockType.WATER || id == BlockType.STATIONARY_WATER;
+        }
+
+        private static bool IsBuildingSupportLocation(BlockPosition point) {
+            return PositiveModulo(point.X, 6) == 0 &&
+                PositiveModulo(point.Z, 6) == 0;
+        }
+
+        private void DrawBuildingSupport(BlockPosition point, int floorHeight) {
+            int groundHeight = GetTerrainHeight(point);
+            for (int y = groundHeight + 1; y < floorHeight; y++) {
+                _bm.SetBlock(point.X, y, point.Z,
+                    AcquaticBlocks.OakLog, axis: BlockAxis.Y);
+            }
         }
 
         const int defaultWindowHeight = 2;

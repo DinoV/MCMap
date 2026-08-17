@@ -67,11 +67,15 @@ namespace MinecraftMapper {
                 return;
             }
 
-            var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data, buildingHeight, groundMaxHeight);
+            bool extendsOverWater;
+            var baseHeights = DrawBuildingWalls(building, buildingPoints, blockType, data,
+                buildingHeight, groundMaxHeight, out extendsOverWater);
             var doors = DrawBuildingSign(building, top, left, bottom, right, baseHeights, buildingPoints);
 
             int floorHeight;
-            var floorPoints = DrawBuildingFloor(top, left, bottom, right, baseHeights, buildingPoints, building, buildingHeight, doors, out floorHeight);
+            var floorPoints = DrawBuildingFloor(top, left, bottom, right, baseHeights,
+                buildingPoints, building, buildingHeight, doors,
+                extendsOverWater ? (int?)groundMaxHeight : null, out floorHeight);
 
             DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints, floorPoints);
 
@@ -99,7 +103,7 @@ namespace MinecraftMapper {
                     if (_conv.IsValidPoint(point.Block)) {
                         int height;
                         if (buildingPoints == null || !buildingPoints.TryGetValue(point.Block, out height)) {
-                            height = GetHeight(point.Block);
+                            height = GetBuildingBaseHeight(point.Block);
                         }
                         groundMaxHeight = Math.Max(groundMaxHeight, height);
                     }

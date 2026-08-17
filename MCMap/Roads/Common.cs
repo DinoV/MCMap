@@ -260,15 +260,17 @@ namespace MinecraftMapper {
             public readonly int Width;
             private readonly string _leftEdgeName, _rightEdgeName;
             private readonly Substrate.Nbt.TagNodeCompound _edgeProperties;
+            private readonly Mapper _mapper;
             protected readonly PositionConverter _conv;
             protected readonly AnvilBlockManager _bm;
             public readonly OsmReader.Way Way;
             private bool IsSidewalk;
 
-            public RoadRenderer(PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width,
+            public RoadRenderer(Mapper mapper, PositionConverter conv, AnvilBlockManager bm, OsmReader.Way way, int width,
                     string blockName, Substrate.Nbt.TagNodeCompound properties, bool isSidealk,
                     string leftEdgeName = null, string rightEdgeName = null,
                     Substrate.Nbt.TagNodeCompound edgeProperties = null) {
+                _mapper = mapper;
                 _conv = conv;
                 _bm = bm;
                 Way = way;
@@ -347,6 +349,9 @@ namespace MinecraftMapper {
                     }
 
                     foreach (var point in PlotLine(from.X, from.Z, to.X, to.Z, targetWidth)) {
+                        if (_mapper._pierDeckHeights.ContainsKey(point.Block)) {
+                            return;
+                        }
                         if (_conv.IsValidPoint(point.Block) && point.Block.X > 1 && point.Block.Z > 1) {
                             bool isSidewalkPoint = IsSidewalk ||
                                 (_leftEdgeName != null && point.Column < SidewalkWidth) ||
@@ -725,7 +730,7 @@ namespace MinecraftMapper {
                     leftEdge = rightEdge = AcquaticBlocks.StoneBricks;
                     break;
             }
-            return new RoadRenderer(_conv, _bm, way, width, blockName, properties, isSidewalk,
+            return new RoadRenderer(this, _conv, _bm, way, width, blockName, properties, isSidewalk,
                 leftEdge, rightEdge);
         }
 

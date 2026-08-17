@@ -16,11 +16,13 @@ namespace MinecraftMapper {
             List<PositionBase> positionBases = new List<PositionBase>();
             double? upperLeftEastingUsFt = null, upperLeftNorthingUsFt = null;
             int mcX = 0, mcZ = 0;
+            bool dryrun = false;
             foreach (var arg in args) {
-                Console.WriteLine(arg);
                 if (arg == "/?" || arg == "/help") {
                     Help();
                     return 0;
+                } else if (arg == "/dryrun") {
+                    dryrun = true;
                 } else if (arg.StartsWith("/log:")) {
                     log = arg.Substring("/log:".Length);
                 } else if (arg.StartsWith("/map:")) {
@@ -83,7 +85,7 @@ namespace MinecraftMapper {
             }
 
             var mapper = new Mapper(log, map, osmData, upperLeftEastingUsFt.Value, upperLeftNorthingUsFt.Value,
-                mcX, mcZ, buildings.ToArray(), roads.ToArray());
+                mcX, mcZ, buildings.ToArray(), roads.ToArray(), dryrun);
             mapper.MapIt();
             return 0;
         }
