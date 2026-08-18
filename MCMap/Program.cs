@@ -10,18 +10,22 @@ using static MinecraftMapper.OsmReader;
 namespace MinecraftMapper {
     partial class Mapper {
         static int Main(string[] args) {
-            string map = null, osmData = null, log = null;
+            string map = null, osmData = null, log = null, outputName = null;
             HashSet<long> ways = new HashSet<long>();
             List<PositionBase> positionBases = new List<PositionBase>();
             double? upperLeftEastingUsFt = null, upperLeftNorthingUsFt = null;
             int mcX = 0, mcZ = 0;
-            bool dryrun = false;
+            bool dryrun = false, copy = false;
             foreach (var arg in args) {
                 if (arg == "/?" || arg == "/help") {
                     Help();
                     return 0;
                 } else if (arg == "/dryrun") {
                     dryrun = true;
+                } else if (arg == "/copy") {
+                    copy = true;
+                } else if (arg.StartsWith("/name:")) {
+                    outputName = arg.Substring("/name:".Length);
                 } else if (arg.StartsWith("/log:")) {
                     log = arg.Substring("/log:".Length);
                 } else if (arg.StartsWith("/map:")) {
@@ -68,6 +72,41 @@ namespace MinecraftMapper {
                 return 1;
             }
 
+            try {
+                map = Path.GetFullPath(map);
+            } catch (Exception e) {
+                Console.WriteLine("Invalid map path: {0}", e.Message);
+                return 1;
+            }
+            if (!Directory.Exists(map)) {
+                Console.WriteLine("Map does not exist: {0}", map);
+                return 1;
+            }
+
+            if (copy || outputName != null) {
+                string outputMap;
+                try {
+                    outputMap = GetOutputMapPath(map, outputName);
+                } catch (ArgumentException e) {
+                    Console.WriteLine(e.Message);
+                    return 1;
+                }
+
+                if (Directory.Exists(outputMap) || File.Exists(outputMap)) {
+                    Console.WriteLine("Output map already exists: {0}", outputMap);
+                    return 1;
+                }
+
+                Console.WriteLine("Copying map to {0}", outputMap);
+                try {
+                    CopyDirectory(map, outputMap);
+                } catch (Exception e) {
+                    Console.WriteLine("Failed to copy map to {0}: {1}", outputMap, e.Message);
+                    return 1;
+                }
+                map = outputMap;
+            }
+
             NbtWorld world;
             try {
                 world = NbtWorld.Open(map);
@@ -86,10 +125,63 @@ namespace MinecraftMapper {
             Console.WriteLine("MCMap: ");
             Console.WriteLine(" /help                         - This help");
             Console.WriteLine(" /map:<map>                    - Specifies path to Minecraft Java Edition save directory");
+            Console.WriteLine(" /copy                         - Copy the map to a new sibling world before rendering");
+            Console.WriteLine(" /name:<worldName>             - Copy to this exact sibling world name; fails if it exists");
             Console.WriteLine(" /osm:<osm.xml>                - Specifies path to Open Street Map .xml file");
             Console.WriteLine(" /pos:<west>,<north>           - Specifies the projected bounds (west, north) outputted from lidar.py");
             Console.WriteLine(" /offset:X,Z                   - Provides an extra offset in Minecraft blocks that's applied from the lat,long");
             Console.WriteLine(" /way:<osmWay>                 - Limit rendering to these OSM ways; may be repeated");
+        }
+
+        private static string GetOutputMapPath(string sourceMap, string outputName) {
+            var source = new DirectoryInfo(sourceMap);
+            if (source.Parent == null) {
+                throw new ArgumentException("The map path must have a parent directory.");
+            }
+
+            if (outputName != null) {
+                if (String.IsNullOrWhiteSpace(outputName) ||
+                        outputName == "." || outputName == ".." ||
+                        Path.IsPathRooted(outputName) ||
+                        Path.GetFileName(outputName) != outputName ||
+                        outputName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) {
+                    throw new ArgumentException(
+                        "/name must contain one valid world folder name, not a path.");
+                }
+                return Path.Combine(source.Parent.FullName, outputName);
+            }
+
+            string baseName = source.Name + "-copy";
+            string candidate = Path.Combine(source.Parent.FullName, baseName);
+            for (int suffix = 2;
+                    Directory.Exists(candidate) || File.Exists(candidate);
+                    suffix++) {
+                candidate = Path.Combine(
+                    source.Parent.FullName, baseName + suffix);
+            }
+            return candidate;
+        }
+
+        private static void CopyDirectory(string sourcePath, string destinationPath) {
+            bool destinationCreated = false;
+            try {
+                Directory.CreateDirectory(destinationPath);
+                destinationCreated = true;
+
+                foreach (string file in Directory.EnumerateFiles(sourcePath)) {
+                    File.Copy(file, Path.Combine(
+                        destinationPath, Path.GetFileName(file)));
+                }
+                foreach (string directory in Directory.EnumerateDirectories(sourcePath)) {
+                    CopyDirectory(directory, Path.Combine(
+                        destinationPath, Path.GetFileName(directory)));
+                }
+            } catch {
+                if (destinationCreated && Directory.Exists(destinationPath)) {
+                    Directory.Delete(destinationPath, true);
+                }
+                throw;
+            }
         }
 
         enum Direction {
