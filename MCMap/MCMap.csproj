@@ -12,7 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="CsvHelper" Version="7.1.1" />
-    <ProjectReference Include="..\Substrate\SubstrateCS\Substrate (NET4).csproj" />
+    <ProjectReference Include="..\Substrate\SubstrateCS\Substrate.csproj" />
   </ItemGroup>
 
   <ItemGroup>
