@@ -150,19 +150,21 @@ namespace MinecraftMapper {
         }
 
         private void DrawDoor(DoorDirection facing, int doorX, int doorZ, int doorHeight) {
+            BlockFacing blockFacing = ToBlockFacing(facing);
+            BlockHinge hinge = BlockHinge.Right;
             _bm.SetBlock(
                 doorX, doorHeight + 1, doorZ, AcquaticBlocks.OakDoor,
-                facing: ToBlockFacing(facing),
+                facing: blockFacing,
                 half: BlockHalf.Lower,
-                hinge: BlockHinge.Right,
+                hinge: hinge,
                 open: false,
                 powered: false);
 
             _bm.SetBlock(
                 doorX, doorHeight + 2, doorZ, AcquaticBlocks.OakDoor,
-                facing: BlockFacing.East,
+                facing: blockFacing,
                 half: BlockHalf.Upper,
-                hinge: BlockHinge.Left,
+                hinge: hinge,
                 open: false,
                 powered: false);
         }
