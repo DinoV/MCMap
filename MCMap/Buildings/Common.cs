@@ -47,6 +47,9 @@ namespace MinecraftMapper {
         private void SaveBlocks() {
             if (!_dryRun) {
                 _world.SaveBlocks();
+                if (_modernEntities != null) {
+                    _modernEntities.Save();
+                }
             }
         }
 
@@ -73,6 +76,8 @@ namespace MinecraftMapper {
             var floorPoints = DrawBuildingFloor(top, left, bottom, right, baseHeights,
                 buildingPoints, building, buildingHeight, doors,
                 extendsOverWater ? (int?)groundMaxHeight : null, out floorHeight);
+
+            DrawBuildingShops(building, floorPoints, floorHeight, doors);
 
             DrawBuildingRoof(building, top, left, bottom, right, buildingHeight, groundMaxHeight, buildingPoints, roofPoints, floorPoints);
 

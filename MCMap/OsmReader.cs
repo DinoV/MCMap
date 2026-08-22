@@ -93,13 +93,12 @@ namespace MinecraftMapper {
             }
         }
 
-        public class ShopNode : Node {
+        public class ShopNode : AddressNode {
             public readonly Shop Shop;
-            public readonly string Name;
 
-            public ShopNode(double lat, double lng, Shop shop, string name) : base(lat, lng) {
+            public ShopNode(double lat, double lng, long id, Shop shop, string name, string houseNumber, string street, int? stories) :
+                base(lat, lng, id, name, houseNumber, street, stories) {
                 Shop = shop;
-                Name = name;
             }
 
             public override string ToString() {
@@ -294,6 +293,7 @@ namespace MinecraftMapper {
             public readonly string HouseNumber, Street, Name;
             public readonly Node[] BuildingNodes;
             public readonly Amenity Amenity;
+            public readonly Shop Shop;
             public float? Stories;
             public readonly Material Material;
             public readonly Color? Color;
@@ -301,12 +301,13 @@ namespace MinecraftMapper {
             public readonly long Id;
             public List<Node> SignItems;
 
-            public Building(long id, string name, string houseNumber, string street, Amenity amenity, Material material, Color? color, RoofInfo roofInfo, Node[] nodes) {
+            public Building(long id, string name, string houseNumber, string street, Amenity amenity, Shop shop, Material material, Color? color, RoofInfo roofInfo, Node[] nodes) {
                 Name = name;
                 Id = id;
                 HouseNumber = houseNumber;
                 Street = street;
                 Amenity = amenity;
+                Shop = shop;
                 BuildingNodes = nodes;
                 Material = material;
                 Color = color;
@@ -371,12 +372,12 @@ namespace MinecraftMapper {
                                 Amenities.Add(amenity);
                             }
                             newNode = amenity;
+                        } else if (tags.shop != Shop.None) {
+                            includeInOrder = true;
+                            newNode = new ShopNode(lat, longitude, id, tags.shop, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
                         } else if (tags.houseNumber != null && tags.street != null) {
                             includeInOrder = true;
                             newNode = new AddressNode(lat, longitude, id, tags.name, tags.houseNumber, tags.street, tags.stories ?? tags.level);
-                        } else if (tags.shop != Shop.None) {
-                            includeInOrder = true;
-                            newNode = new ShopNode(lat, longitude, tags.shop, tags.name);
                         } else {
                             newNode = new Node(lat, longitude);
                         }
@@ -453,6 +454,7 @@ namespace MinecraftMapper {
                                 tags.houseNumber,
                                 tags.street,
                                 tags.amenity,
+                                tags.shop,
                                 tags.material,
                                 tags.buildingColor,
                                 roof,
@@ -490,7 +492,7 @@ namespace MinecraftMapper {
                                         buildingObj.AddItem(node);
                                         itemsCount++;
                                         AddressNode sn = node as AddressNode;
-                                        if (sn != null) {
+                                        if (sn != null && sn.HouseNumber != null && sn.Street != null) {
                                             BuildingsByAddress[sn.HouseNumber + " " + sn.Street] = buildingObj;
                                         }
                                     }

@@ -13,6 +13,7 @@ namespace MinecraftMapper {
         private readonly PositionConverter _conv;
         private readonly OsmReader _reader;
         private readonly AnvilBlockManager _bm;
+        private readonly ModernEntityManager _modernEntities;
         private readonly StreamWriter _log;
         private readonly bool _dryRun = false;
 
@@ -27,6 +28,10 @@ namespace MinecraftMapper {
                 _log = new StreamWriter(new FileStream(log, FileMode.Create, FileAccess.ReadWrite));
             }
             var region = ((AnvilWorld)_world).GetRegionManager().GetRegionPath();
+            var entityRegion = Path.Combine(Directory.GetParent(region).FullName, "entities");
+            if (Directory.Exists(entityRegion)) {
+                _modernEntities = new ModernEntityManager(entityRegion);
+            }
 
             int maxChunkX = Int32.MinValue, maxChunkZ = Int32.MinValue;
             int minChunkX = Int32.MaxValue, minChunkZ = Int32.MaxValue;
@@ -148,28 +153,33 @@ namespace MinecraftMapper {
                 DrawBarriers(buildingPoints);
 
                 foreach (var node in _reader.Amenities) {
-                    var point = _conv.ToBlock(node.Lat, node.Long);
-                    _bm.SetBlock(
-                        point.X,
-                        _bm.GetHeight(point.X, point.Z) + 1,
-                        point.Z,
-                        AcquaticBlocks.NetherBrickFence,
-                        north: false, east: false, south: false, west: false
-                    );
-                    _bm.SetBlock(
-                        point.X + 1,
-                        _bm.GetHeight(point.X + 1, point.Z) + 1,
-                        point.Z,
-                        AcquaticBlocks.NetherBrickFence,
-                        north: false, east: false, south: false, west: false
-                    );
-                    _bm.SetBlock(
-                        point.X + 2,
-                        _bm.GetHeight(point.X + 2, point.Z) + 1,
-                        point.Z,
-                        AcquaticBlocks.NetherBrickFence,
-                        north: false, east: false, south: false, west: false
-                    );
+                    switch(node.Amenity) {
+                        case Amenity.BicycleParking:
+                            var point = _conv.ToBlock(node.Lat, node.Long);
+                            Console.WriteLine("Bike rack {0} {1}", point, node.Id);
+                            _bm.SetBlock(
+                                point.X,
+                                _bm.GetHeight(point.X, point.Z),
+                                point.Z,
+                                AcquaticBlocks.NetherBrickFence,
+                                north: false, east: false, south: false, west: false
+                            );
+                            _bm.SetBlock(
+                                point.X + 1,
+                                _bm.GetHeight(point.X + 1, point.Z),
+                                point.Z,
+                                AcquaticBlocks.NetherBrickFence,
+                                north: false, east: false, south: false, west: false
+                            );
+                            _bm.SetBlock(
+                                point.X + 2,
+                                _bm.GetHeight(point.X + 2, point.Z),
+                                point.Z,
+                                AcquaticBlocks.NetherBrickFence,
+                                north: false, east: false, south: false, west: false
+                            );
+                            break;
+                    }
                 }
                 Save();
             } catch (Exception e) {
