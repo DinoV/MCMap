@@ -26,6 +26,7 @@ namespace MinecraftMapper {
                     copy = true;
                 } else if (arg.StartsWith("/name:")) {
                     outputName = arg.Substring("/name:".Length);
+                    copy = true;
                 } else if (arg.StartsWith("/log:")) {
                     log = arg.Substring("/log:".Length);
                 } else if (arg.StartsWith("/map:")) {
