@@ -1522,7 +1522,7 @@ def map_absolute_elevation_to_byte(
     vertical_metres_per_unit: float,
     chunk_rows: int,
 ) -> tuple[float, float, int, int]:
-    """Encode absolute elevation so one metre equals one grayscale step."""
+    """Encode absolute elevation at one block per metre, rounding land up."""
 
     print("\nStage 2/4: mapping absolute elevation at one metre per block")
     source = gdal.Open(str(source_tif), gdal.GA_ReadOnly)
@@ -1580,8 +1580,12 @@ def map_absolute_elevation_to_byte(
             # as elevation zero so WorldPainter fills it at the configured
             # sea level instead of creating a deep void at image value zero.
             mapped[~valid] = float(minecraft_sea_level)
+            # Keep any positive fraction of a metre instead of allowing a
+            # low shoreline to round down onto the same block as adjacent
+            # hydro-flattened water. NoData was assigned the integral sea
+            # level above, so it remains unchanged by ceil().
             error_code = destination_band.WriteArray(
-                np.rint(mapped).astype(np.uint8), 0, y_offset
+                np.ceil(mapped).astype(np.uint8), 0, y_offset
             )
             if error_code not in (None, 0):
                 raise RuntimeError(
