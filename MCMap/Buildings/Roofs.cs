@@ -249,12 +249,12 @@ namespace MinecraftMapper {
                     }
 
                     if ((lHeight & 0x01) == 0) {
-                        for (int j = 0; j <= lHeight / 2; j++) {
-                            if (roofPoints.Contains(new BlockPosition(x, tStart + lHeight / 2))) {
-                                continue;
+                        var ridgePoint = new BlockPosition(x, tStart + lHeight / 2);
+                        if (!roofPoints.Contains(ridgePoint)) {
+                            for (int j = 0; j <= lHeight / 2; j++) {
+                                SetMappedBlock(_bm, x, roofStart + j, ridgePoint.Z, baseType, dataType);
                             }
-                            SetMappedBlock(_bm, x, roofStart + j, tStart + lHeight / 2, baseType, dataType);
-                            roofPoints.Add(new BlockPosition(x, tStart + lHeight / 2));
+                            roofPoints.Add(ridgePoint);
                         }
                     }
                 }
@@ -292,14 +292,12 @@ namespace MinecraftMapper {
                     }
 
                     if ((lWidth & 0x01) == 0) {
-                        for (int j = 0; j <= lWidth / 2; j++) {
-                            if (roofPoints.Contains(new BlockPosition(lStart + lWidth / 2, y))) {
-                                continue;
+                        var ridgePoint = new BlockPosition(lStart + lWidth / 2, y);
+                        if (!roofPoints.Contains(ridgePoint)) {
+                            for (int j = 0; j <= lWidth / 2; j++) {
+                                SetMappedBlock(_bm, ridgePoint.X, roofStart + j, y, baseType, dataType);
                             }
-
-                            SetMappedBlock(_bm, lStart + lWidth / 2, roofStart + j, y, baseType, dataType);
-                            roofPoints.Add(new BlockPosition(lStart + lWidth / 2, y));
-
+                            roofPoints.Add(ridgePoint);
                         }
                     }
                 }
