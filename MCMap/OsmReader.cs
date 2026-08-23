@@ -175,6 +175,9 @@ namespace MinecraftMapper {
             VarietyStore,
             Jewelery,
             Razors,
+            Art,
+            Supermarket,
+            Gift,
         }
 
         public enum Amenity {
@@ -1141,6 +1144,9 @@ namespace MinecraftMapper {
                 case "car_repair": return Shop.CarRepair;
                 case "hairdresser": return Shop.HairDresser;
                 case "bakery": return Shop.Bakery;
+                case "art": return Shop.Art;
+                case "supermarket": return Shop.Supermarket;
+                case "gift": return Shop.Gift;
                 case "bicycle": return Shop.Bicycle;
                 case "beauty": return Shop.Beauty;
                 case "boutique": return Shop.Boutique;

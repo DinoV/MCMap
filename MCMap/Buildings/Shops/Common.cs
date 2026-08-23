@@ -10,7 +10,7 @@ namespace MinecraftMapper {
     partial class Mapper {
         private delegate ShopItem[] ShopDisplayOverride(Mapper mapper, ShopPlacement shop,
             BlockPosition point, int height, BlockFacing facing, int offset, int lineX, int lineZ,
-            ShopItem[] sectionItems);
+            ShopItem[] sectionItems, bool againstWall);
 
         private sealed class ShopDefinition {
             public readonly Shop Type;
@@ -106,7 +106,11 @@ namespace MinecraftMapper {
         };
 
         private static readonly Dictionary<Shop, ShopDefinition> ShopDefinitions =
-            new[] { CreateConvenienceStoreDefinition(), CreateClothingStoreDefinition() }
+            new[] {
+                CreateConvenienceStoreDefinition(), CreateClothingStoreDefinition(),
+                CreateArtStoreDefinition(), CreateBakeryDefinition(),
+                CreateSupermarketDefinition(), CreateGiftStoreDefinition(),
+            }
                 .ToDictionary(definition => definition.Type);
 
         private void DrawBuildingShops(Building building, HashSet<BlockPosition> floorPoints,
@@ -186,14 +190,15 @@ namespace MinecraftMapper {
             int maxX = shop.FloorPoints.Max(point => point.X);
             int minZ = shop.FloorPoints.Min(point => point.Z);
             int maxZ = shop.FloorPoints.Max(point => point.Z);
+            int aisleSpacing = shop.Definition.Type == Shop.Art ? 4 : 3;
 
             if (aislesRunEastWest) {
-                for (int z = minZ + 3; z <= maxZ - 3; z += 3) {
+                for (int z = minZ + 3; z <= maxZ - 3; z += aisleSpacing) {
                     DrawShopDisplayLine(shop, floorHeight, doors, occupied, plan,
                         new BlockPosition(minX + 2, z), new BlockPosition(maxX - 2, z), false);
                 }
             } else {
-                for (int x = minX + 3; x <= maxX - 3; x += 3) {
+                for (int x = minX + 3; x <= maxX - 3; x += aisleSpacing) {
                     DrawShopDisplayLine(shop, floorHeight, doors, occupied, plan,
                         new BlockPosition(x, minZ + 2), new BlockPosition(x, maxZ - 2), false);
                 }
@@ -228,19 +233,30 @@ namespace MinecraftMapper {
             while (length - index >= 1) {
                 ShopSection section = plan.NextSection();
                 if (section == null) return;
-                int required = section.Items.Length;
+                int required = shop.Definition.Type == Shop.Art
+                    ? Math.Min(plan.Random.Next(3, 6), length - index)
+                    : section.Items.Length;
                 if (length - index < required) break;
                 var displayed = new List<BlockPosition>();
-                for (int i = 0; i < section.Items.Length; i++) {
+                var containers = new List<BlockPosition>();
+                for (int i = 0; i < required; i++) {
                     var point = new BlockPosition(start.X + (index + i) * dx, start.Z + (index + i) * dz);
+                    bool renderedContainer;
                     if (TryDrawShopDisplay(shop, point, floorHeight, doors, occupied, plan,
-                            dx, dz, new[] { section.Items[i] }, againstWall ? floorHeight + 1 : floorHeight + 2)) {
+                            dx, dz, new[] { section.Items[i % section.Items.Length] },
+                            againstWall ? floorHeight + 1 : floorHeight + 2,
+                            againstWall, out renderedContainer)) {
                         displayed.Add(point);
+                        if (renderedContainer) containers.Add(point);
                     }
                 }
                 if (displayed.Count > 0) {
-                    if (againstWall) {
-                        DrawWallShopSection(shop, section, displayed, floorHeight, dx, dz);
+                    if (shop.Definition.Type == Shop.Art) {
+                        DrawArtShopSection(shop, displayed, floorHeight, dx, dz, againstWall, plan.Random);
+                    } else if (againstWall) {
+                        if (containers.Count > 0) {
+                            DrawWallShopSection(shop, section, containers, floorHeight, dx, dz);
+                        }
                     } else {
                         DrawInteriorShopSection(shop, section, displayed, floorHeight, dx, dz);
                     }
@@ -251,7 +267,9 @@ namespace MinecraftMapper {
 
         private bool TryDrawShopDisplay(ShopPlacement shop, BlockPosition point, int floorHeight,
                 HashSet<BlockPosition> doors, HashSet<BlockPosition> occupied, ShopDisplayPlan plan,
-                int lineX, int lineZ, ShopItem[] sectionItems, int displayHeight) {
+                int lineX, int lineZ, ShopItem[] sectionItems, int displayHeight, bool againstWall,
+                out bool renderedContainer) {
+            renderedContainer = false;
             if (!shop.FloorPoints.Contains(point) || occupied.Contains(point) ||
                     doors.Any(door => ManhattanDistance(point, door) <= 2) ||
                     _bm.GetStringID(point.X, displayHeight, point.Z) != AcquaticBlocks.Air) {
@@ -263,13 +281,15 @@ namespace MinecraftMapper {
             ShopItem[] displayInventory = sectionItems;
             if (shop.Definition.DisplayOverride != null) {
                 displayInventory = shop.Definition.DisplayOverride(
-                    this, shop, point, displayHeight, facing, offset, lineX, lineZ, sectionItems);
+                    this, shop, point, displayHeight, facing, offset, lineX, lineZ,
+                    sectionItems, againstWall);
             }
             if (displayInventory == null) {
                 occupied.Add(point);
                 return true;
             }
 
+            renderedContainer = true;
             if (plan.ContainerType == 0) {
                 _bm.SetBlock(point.X, displayHeight, point.Z, AcquaticBlocks.Chest, facing);
                 var chest = new TileEntityChest { UseModernFormat = true };

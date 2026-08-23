@@ -24,7 +24,7 @@ namespace MinecraftMapper {
 
         private static ShopItem[] DrawClothingStoreDisplay(Mapper mapper, ShopPlacement shop,
                 BlockPosition point, int height, BlockFacing facing, int offset, int lineX, int lineZ,
-                ShopItem[] sectionItems) {
+                ShopItem[] sectionItems, bool againstWall) {
             if (sectionItems.Any(item => item.Id.Contains("horse_armor") || item.Id == "minecraft:wolf_armor")) {
                 mapper.RemoveClothingArmorStand(shop, point, height);
                 return sectionItems;
