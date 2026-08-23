@@ -113,6 +113,7 @@ namespace MinecraftMapper {
                 CreateArtStoreDefinition(), CreateBakeryDefinition(),
                 CreateSupermarketDefinition(), CreateGiftStoreDefinition(),
                 CreateBookStoreDefinition(),
+                CreateFloristDefinition(),
             }
                 .ToDictionary(definition => definition.Type);
 
@@ -257,6 +258,10 @@ namespace MinecraftMapper {
                     if (shop.Definition.Type == Shop.Art) {
                         DrawArtShopSection(shop, displayed, floorHeight, dx, dz, againstWall, plan.Random);
                     } else if (shop.Definition.Type == Shop.Books) {
+                        if (againstWall && containers.Count > 0) {
+                            DrawWallShopSection(shop, section, containers, floorHeight, dx, dz);
+                        }
+                    } else if (shop.Definition.Type == Shop.Florist) {
                         if (againstWall && containers.Count > 0) {
                             DrawWallShopSection(shop, section, containers, floorHeight, dx, dz);
                         }

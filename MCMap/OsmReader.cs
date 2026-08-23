@@ -179,6 +179,7 @@ namespace MinecraftMapper {
             Supermarket,
             Gift,
             Books,
+            Florist,
         }
 
         public enum Amenity {
@@ -1149,6 +1150,7 @@ namespace MinecraftMapper {
                 case "supermarket": return Shop.Supermarket;
                 case "gift": return Shop.Gift;
                 case "books": return Shop.Books;
+                case "florist": return Shop.Florist;
                 case "bicycle": return Shop.Bicycle;
                 case "beauty": return Shop.Beauty;
                 case "boutique": return Shop.Boutique;
