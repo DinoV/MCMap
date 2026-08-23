@@ -52,10 +52,12 @@ namespace MinecraftMapper {
         private sealed class ShopItem {
             public readonly string Id;
             public readonly int Count;
+            public readonly bool FillContainer;
 
-            public ShopItem(string id, int count = 8) {
+            public ShopItem(string id, int count = 8, bool fillContainer = false) {
                 Id = id;
                 Count = count;
+                FillContainer = fillContainer;
             }
         }
 
@@ -110,6 +112,7 @@ namespace MinecraftMapper {
                 CreateConvenienceStoreDefinition(), CreateClothingStoreDefinition(),
                 CreateArtStoreDefinition(), CreateBakeryDefinition(),
                 CreateSupermarketDefinition(), CreateGiftStoreDefinition(),
+                CreateBookStoreDefinition(),
             }
                 .ToDictionary(definition => definition.Type);
 
@@ -190,7 +193,7 @@ namespace MinecraftMapper {
             int maxX = shop.FloorPoints.Max(point => point.X);
             int minZ = shop.FloorPoints.Min(point => point.Z);
             int maxZ = shop.FloorPoints.Max(point => point.Z);
-            int aisleSpacing = shop.Definition.Type == Shop.Art ? 4 : 3;
+            int aisleSpacing = UsesWideShopRows(shop.Definition.Type) ? 4 : 3;
 
             if (aislesRunEastWest) {
                 for (int z = minZ + 3; z <= maxZ - 3; z += aisleSpacing) {
@@ -233,7 +236,7 @@ namespace MinecraftMapper {
             while (length - index >= 1) {
                 ShopSection section = plan.NextSection();
                 if (section == null) return;
-                int required = shop.Definition.Type == Shop.Art
+                int required = UsesWideShopRows(shop.Definition.Type)
                     ? Math.Min(plan.Random.Next(3, 6), length - index)
                     : section.Items.Length;
                 if (length - index < required) break;
@@ -253,6 +256,10 @@ namespace MinecraftMapper {
                 if (displayed.Count > 0) {
                     if (shop.Definition.Type == Shop.Art) {
                         DrawArtShopSection(shop, displayed, floorHeight, dx, dz, againstWall, plan.Random);
+                    } else if (shop.Definition.Type == Shop.Books) {
+                        if (againstWall && containers.Count > 0) {
+                            DrawWallShopSection(shop, section, containers, floorHeight, dx, dz);
+                        }
                     } else if (againstWall) {
                         if (containers.Count > 0) {
                             DrawWallShopSection(shop, section, containers, floorHeight, dx, dz);
@@ -454,7 +461,8 @@ namespace MinecraftMapper {
         }
 
         private static void FillInventory(ItemCollection inventory, ShopItem[] items, int offset) {
-            for (int slot = 0; slot < Math.Min(9, items.Length); slot++) {
+            int slots = items.Any(item => item.FillContainer) ? 9 : Math.Min(9, items.Length);
+            for (int slot = 0; slot < slots; slot++) {
                 ShopItem item = items[(slot + offset) % items.Length];
                 inventory[slot] = new Item(item.Id) { Count = item.Count };
             }
@@ -530,7 +538,8 @@ namespace MinecraftMapper {
 
         private static TileEntity CreateModernShopContainer(string entityId, ShopItem[] inventory, int offset) {
             var items = new TagNodeList(TagType.TAG_COMPOUND);
-            for (int slot = 0; slot < Math.Min(9, inventory.Length); slot++) {
+            int slots = inventory.Any(item => item.FillContainer) ? 9 : Math.Min(9, inventory.Length);
+            for (int slot = 0; slot < slots; slot++) {
                 ShopItem item = inventory[(slot + offset) % inventory.Length];
                 items.Add(new TagNodeCompound {
                     ["Slot"] = new TagNodeByte((byte)slot), ["id"] = new TagNodeString(item.Id),
@@ -542,6 +551,10 @@ namespace MinecraftMapper {
             entity.Source["components"] = new TagNodeCompound();
             entity.Source["keepPacked"] = new TagNodeByte(0);
             return entity;
+        }
+
+        private static bool UsesWideShopRows(Shop type) {
+            return type == Shop.Art || type == Shop.Books;
         }
 
         private void DrawShopCheckoutAndKeeper(ShopPlacement shop, int floorHeight,
