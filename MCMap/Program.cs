@@ -115,6 +115,8 @@ namespace MinecraftMapper {
                 Console.WriteLine("Failed to open world {0}: {1}", map, e.Message);
                 return 1;
             }
+            world.Level.LastPlayed = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            world.Level.Save();
 
             var mapper = new Mapper(log, map, osmData, upperLeftEastingUsFt.Value, upperLeftNorthingUsFt.Value,
                 mcX, mcZ, ways, dryrun);
