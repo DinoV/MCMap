@@ -403,7 +403,7 @@ namespace MinecraftMapper {
                             tags.signType = SignType.RailroadCrossing;
                         }
                         if (tags.pointFeature != PointFeatureKind.None) {
-                            PointFeatures.Add(new PointFeature(id, newNode, tags.pointFeature));
+                            PointFeatures.Add(new PointFeature(id, newNode, tags.pointFeature, tags.brand));
                         }
                         if (includeInOrder) {
                             SortedDictionary<double, Node> longNodes;
@@ -585,11 +585,13 @@ namespace MinecraftMapper {
             public readonly long Id;
             public readonly Node Node;
             public readonly PointFeatureKind Kind;
+            public readonly string Brand;
 
-            public PointFeature(long id, Node node, PointFeatureKind kind) {
+            public PointFeature(long id, Node node, PointFeatureKind kind, string brand) {
                 Id = id;
                 Node = node;
                 Kind = kind;
+                Brand = brand;
             }
         }
 
@@ -783,6 +785,7 @@ namespace MinecraftMapper {
             public Material material;
             public RoadType roadType;
             public string name;
+            public string brand;
             public BuildingType building;
             public int? layer;
             public string street;
@@ -864,7 +867,8 @@ namespace MinecraftMapper {
             Bollard,
             UtilityPole,
             Flagpole,
-            PublicBookcase
+            PublicBookcase,
+            ParcelLocker
         }
 
         public enum LandUse {
@@ -1097,9 +1101,14 @@ namespace MinecraftMapper {
                 case "amenity":
                     if (value == "public_bookcase") {
                         tagInfo.pointFeature = PointFeatureKind.PublicBookcase;
+                    } else if (value == "parcel_locker") {
+                        tagInfo.pointFeature = PointFeatureKind.ParcelLocker;
                     } else {
                         tagInfo.amenity = ReadAmenity(value);
                     }
+                    break;
+                case "brand":
+                    tagInfo.brand = value;
                     break;
                 case "shop":
                     tagInfo.shop = ReadShop(value);

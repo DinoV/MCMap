@@ -60,6 +60,25 @@ namespace MinecraftMapper {
             AcquaticBlocks.PaleOakFence,
         };
 
+        private static readonly string[] ParcelLockerShulkerBoxes = {
+            AcquaticBlocks.WhiteShulkerBox,
+            AcquaticBlocks.OrangeShulkerBox,
+            AcquaticBlocks.MagentaShulkerBox,
+            AcquaticBlocks.LightBlueShulkerBox,
+            AcquaticBlocks.YellowShulkerBox,
+            AcquaticBlocks.LimeShulkerBox,
+            AcquaticBlocks.PinkShulkerBox,
+            AcquaticBlocks.GrayShulkerBox,
+            AcquaticBlocks.LightGrayShulkerBox,
+            AcquaticBlocks.CyanShulkerBox,
+            AcquaticBlocks.PurpleShulkerBox,
+            AcquaticBlocks.BlueShulkerBox,
+            AcquaticBlocks.BrownShulkerBox,
+            AcquaticBlocks.GreenShulkerBox,
+            AcquaticBlocks.RedShulkerBox,
+            AcquaticBlocks.BlackShulkerBox,
+        };
+
         private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             int cur = 0;
             foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
@@ -178,6 +197,9 @@ namespace MinecraftMapper {
                     case PointFeatureKind.PublicBookcase:
                         DrawPublicBookcase(feature, point, height);
                         break;
+                    case PointFeatureKind.ParcelLocker:
+                        DrawParcelLocker(feature, point, height, roadPoints, buildingPositions);
+                        break;
                 }
                 occupiedPointFeatures.Add(point);
             }
@@ -289,6 +311,73 @@ namespace MinecraftMapper {
                 south: false,
                 west: false);
             _bm.SetBlock(point.X, height + 1, point.Z, AcquaticBlocks.Bookshelf);
+        }
+
+        private void DrawParcelLocker(
+                PointFeature feature,
+                BlockPosition point,
+                int height,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions) {
+            string block = String.Equals(feature.Brand, "Amazon Hub", StringComparison.OrdinalIgnoreCase)
+                ? AcquaticBlocks.OrangeShulkerBox
+                : ParcelLockerShulkerBoxes[(int)(unchecked((ulong)feature.Id) % (ulong)ParcelLockerShulkerBoxes.Length)];
+            BlockFacing facing = FindPointFeatureFacing(point, roadPoints, buildingPositions);
+            int widthX = facing == BlockFacing.North || facing == BlockFacing.South ? 1 : 0;
+            int widthZ = widthX == 0 ? 1 : 0;
+
+            for (int width = 0; width < 2; width++) {
+                for (int y = 0; y < 2; y++) {
+                    _bm.SetBlock(
+                        point.X + width * widthX,
+                        height + y,
+                        point.Z + width * widthZ,
+                        block,
+                        facing: facing);
+                }
+            }
+        }
+
+        private static BlockFacing FindPointFeatureFacing(
+                BlockPosition point,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions) {
+            const int SearchRadius = 20;
+            BlockPosition? nearest = null;
+            int nearestDistance = Int32.MaxValue;
+            for (int x = -SearchRadius; x <= SearchRadius; x++) {
+                for (int z = -SearchRadius; z <= SearchRadius; z++) {
+                    if (x == 0 && z == 0) continue;
+                    BlockPosition target;
+                    if (IsRenderedFeatureAt(point.X + x, point.Z + z, roadPoints, buildingPositions, out target)) {
+                        int distance = x * x + z * z;
+                        if (distance < nearestDistance) {
+                            nearest = target;
+                            nearestDistance = distance;
+                        }
+                    }
+                }
+            }
+            return nearest == null ? BlockFacing.North : FacingToward(point, nearest.Value);
+        }
+
+        private static bool IsRenderedFeatureAt(
+                int x,
+                int z,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions,
+                out BlockPosition target) {
+            target = new BlockPosition(x, z);
+            return roadPoints.ContainsKey(target) || buildingPositions.ContainsKey(target);
+        }
+
+        private static BlockFacing FacingToward(BlockPosition from, BlockPosition to) {
+            int xDelta = to.X - from.X;
+            int zDelta = to.Z - from.Z;
+            if (Math.Abs(xDelta) > Math.Abs(zDelta)) {
+                return xDelta < 0 ? BlockFacing.West : BlockFacing.East;
+            }
+            return zDelta < 0 ? BlockFacing.North : BlockFacing.South;
         }
 
         private void DrawWallColumn(BlockPosition point, int height, int blocks, string block) {
