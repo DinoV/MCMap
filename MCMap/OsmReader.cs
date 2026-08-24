@@ -863,7 +863,8 @@ namespace MinecraftMapper {
             None,
             Bollard,
             UtilityPole,
-            Flagpole
+            Flagpole,
+            PublicBookcase
         }
 
         public enum LandUse {
@@ -1094,7 +1095,11 @@ namespace MinecraftMapper {
                     tagInfo.parking = ReadParking(value);
                     break;
                 case "amenity":
-                    tagInfo.amenity = ReadAmenity(value);
+                    if (value == "public_bookcase") {
+                        tagInfo.pointFeature = PointFeatureKind.PublicBookcase;
+                    } else {
+                        tagInfo.amenity = ReadAmenity(value);
+                    }
                     break;
                 case "shop":
                     tagInfo.shop = ReadShop(value);

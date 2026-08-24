@@ -47,6 +47,19 @@ namespace MinecraftMapper {
                 AcquaticBlocks.CactusFlower,
             };
 
+        private static readonly string[] PublicBookcaseFenceBlocks = {
+            AcquaticBlocks.OakFence,
+            AcquaticBlocks.SpruceFence,
+            AcquaticBlocks.BirchFence,
+            AcquaticBlocks.JungleFence,
+            AcquaticBlocks.AcaciaFence,
+            AcquaticBlocks.DarkOakFence,
+            AcquaticBlocks.MangroveFence,
+            AcquaticBlocks.CherryFence,
+            AcquaticBlocks.BambooFence,
+            AcquaticBlocks.PaleOakFence,
+        };
+
         private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             int cur = 0;
             foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
@@ -162,6 +175,9 @@ namespace MinecraftMapper {
                         DrawWallColumn(point, height, 5, AcquaticBlocks.DioriteWall);
                         DrawFlagpoleBanner(feature, point, height + 4);
                         break;
+                    case PointFeatureKind.PublicBookcase:
+                        DrawPublicBookcase(feature, point, height);
+                        break;
                 }
                 occupiedPointFeatures.Add(point);
             }
@@ -259,6 +275,20 @@ namespace MinecraftMapper {
                     break;
                 }
             }
+        }
+
+        private void DrawPublicBookcase(PointFeature feature, BlockPosition point, int height) {
+            int fence = (int)(unchecked((ulong)feature.Id) % (ulong)PublicBookcaseFenceBlocks.Length);
+            _bm.SetBlock(
+                point.X,
+                height,
+                point.Z,
+                PublicBookcaseFenceBlocks[fence],
+                north: false,
+                east: false,
+                south: false,
+                west: false);
+            _bm.SetBlock(point.X, height + 1, point.Z, AcquaticBlocks.Bookshelf);
         }
 
         private void DrawWallColumn(BlockPosition point, int height, int blocks, string block) {
