@@ -117,6 +117,7 @@ namespace MinecraftMapper {
                 CreateDeliDefinition(), CreateCopyShopDefinition(),
                 CreatePastryShopDefinition(), CreateButcherDefinition(),
                 CreateStationeryStoreDefinition(),
+                CreatePetStoreDefinition(),
             }
                 .ToDictionary(definition => definition.Type);
 
@@ -182,6 +183,11 @@ namespace MinecraftMapper {
             var occupied = new HashSet<BlockPosition>();
             var plan = new ShopDisplayPlan(shop.Id, shop.Definition);
             Console.WriteLine("Shop {0} {1} at {2} {3} ({4})", shop.Name, shop.Definition.Type, shop.FloorPoints.FirstOrDefault(), shop.FloorPoints.Count, shop.Id);
+            if (shop.Definition.Type == Shop.Pet) {
+                DrawPetStore(shop, floorHeight, doors, occupied);
+                DrawShopCheckoutAndKeeper(shop, floorHeight, doors, occupied);
+                return;
+            }
             if (shop.FloorPoints.Count >= 64 && width >= 7 && depth >= 7) {
                 DrawShopAisles(shop, floorHeight, doors, occupied, plan, width >= depth);
             } else {
