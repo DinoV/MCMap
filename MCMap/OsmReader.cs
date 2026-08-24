@@ -25,6 +25,10 @@ namespace MinecraftMapper {
         public readonly List<PierInfo> Piers = new List<PierInfo>();
         private readonly string _sourceXml;
         private readonly HashSet<long> _ways;
+        private readonly Dictionary<string, Dictionary<string, int>> _unknownValues =
+            new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _unknownTagKeys =
+            new Dictionary<string, int>(StringComparer.Ordinal);
   
         public OsmReader(string sourceXml, HashSet<long> ways) {
             _sourceXml = sourceXml;
@@ -566,6 +570,7 @@ namespace MinecraftMapper {
                         break;
                 }
             }
+            PrintUnknownSummary();
         }
 
         internal class LandInfo {
@@ -842,7 +847,45 @@ namespace MinecraftMapper {
             Park
         }
 
-        private static void ReadTag(ref TagInfo tagInfo, XElement node) {
+        private void RecordUnknown(string category, string value) {
+            Dictionary<string, int> values;
+            if (!_unknownValues.TryGetValue(category, out values)) {
+                values = _unknownValues[category] =
+                    new Dictionary<string, int>(StringComparer.Ordinal);
+            }
+            value = value ?? "<null>";
+            int count;
+            values[value] = values.TryGetValue(value, out count) ? count + 1 : 1;
+        }
+
+        private void RecordUnknownTagKey(string key) {
+            int count;
+            _unknownTagKeys[key] = _unknownTagKeys.TryGetValue(key, out count) ? count + 1 : 1;
+        }
+
+        private void PrintUnknownSummary() {
+            foreach (var category in _unknownValues.OrderBy(item => item.Key, StringComparer.Ordinal)) {
+                Console.WriteLine("Unknown {0} values ({1} total):",
+                    category.Key, category.Value.Values.Sum());
+                foreach (var value in category.Value
+                        .OrderByDescending(item => item.Value)
+                        .ThenBy(item => item.Key, StringComparer.Ordinal)
+                        .Take(10)) {
+                    Console.WriteLine("  {0}: {1}", value.Key, value.Value);
+                }
+            }
+            if (_unknownTagKeys.Count > 0) {
+                Console.WriteLine("Unknown tag keys ({0} total):", _unknownTagKeys.Values.Sum());
+                foreach (var key in _unknownTagKeys
+                        .OrderByDescending(item => item.Value)
+                        .ThenBy(item => item.Key, StringComparer.Ordinal)
+                        .Take(10)) {
+                    Console.WriteLine("  {0}: {1}", key.Key, key.Value);
+                }
+            }
+        }
+
+        private void ReadTag(ref TagInfo tagInfo, XElement node) {
             var key = node.Attribute("k").Value;
             var value = node.Attribute("v").Value;
             switch (key) {
@@ -850,33 +893,34 @@ namespace MinecraftMapper {
                     tagInfo.bridge = value != "no";
                     break;
                 case "junction":
-                    tagInfo.roundabout = value == "roundabout";
+                    if (value == "roundabout") tagInfo.roundabout = true;
+                    else RecordUnknown("junction", value);
                     break;
                 case "leisure":
                     if (value == "park") {
                         tagInfo.leisuire = Leisure.Park;
-                        break;
-                    }
+                    } else RecordUnknown("leisure", value);
                     break;
                 case "landuse":
                     if (value == "allotments") {
                         tagInfo.landUse = LandUse.Allotments;
-                    }
+                    } else RecordUnknown("landuse", value);
                     break;
                 case "natural":
-                    tagInfo.coastline = value == "coastline";
+                    if (value == "coastline") tagInfo.coastline = true;
+                    else RecordUnknown("natural", value);
                     break;
                 case "man_made":
-                    tagInfo.pier = value == "pier";
+                    if (value == "pier") tagInfo.pier = true;
+                    else RecordUnknown("man_made", value);
                     break;
                 case "floating":
-                    tagInfo.floating = value == "yes";
+                    if (value == "yes") tagInfo.floating = true;
+                    else if (value == "no") tagInfo.floating = false;
+                    else RecordUnknown("floating", value);
                     break;
                 case "direction":
-                    int dir;
-                    if (Int32.TryParse(value, out dir)) {
-                        tagInfo.direction = dir;
-                    }
+                    tagInfo.direction = ParseDirection(value, "direction");
                     break;
                 case "wall":
                     switch(value) {
@@ -889,6 +933,7 @@ namespace MinecraftMapper {
                         case "seawall": tagInfo.wall = Wall.Seawall; break;
                         case "flood_wall": tagInfo.wall = Wall.FloodWall; break;
                         case "castle_wall": tagInfo.wall = Wall.CastleWall; break;
+                        default: RecordUnknown("wall", value); break;
                     }
                     break;
                 case "roof:shape":
@@ -905,32 +950,34 @@ namespace MinecraftMapper {
                         case "onion": tagInfo.roofType = RoofType.Onion; break;
                         case "round": tagInfo.roofType = RoofType.Round; break;
                         case "saltbox": tagInfo.roofType = RoofType.Saltbox; break;
+                        default: RecordUnknown("roof shape", value); break;
                     }
                     break;
                 case "roof:height":
                     double roofHeight;
                     if (double.TryParse(value, out roofHeight)) {
                         tagInfo.roofHeight = roofHeight;
-                    }
+                    } else RecordUnknown("roof height", value);
                     break;
                 case "roof:colour":
-                    tagInfo.roofColor = ParseColor(value);
+                    tagInfo.roofColor = ParseColor(value, "roof colour");
                     break;
                 case "roof:orientation":
                     if(value == "across") {
                         tagInfo.roofOrientationAcross = true;
-                    }
+                    } else if (value == "along") tagInfo.roofOrientationAcross = false;
+                    else RecordUnknown("roof orientation", value);
                     break;
                 case "roof:material":
-                    tagInfo.roofMaterial = ReadMaterial(value);
+                    tagInfo.roofMaterial = ReadMaterial(value, "roof material");
                     break;
                 case "roof:direction":
-                    tagInfo.roofDirection = ParseDirection(value);
+                    tagInfo.roofDirection = ParseDirection(value, "roof direction");
                     break;
                 case "oneway":
-                    if (value == "yes") {
-                        tagInfo.oneWay = true;
-                    }
+                    if (value == "yes" || value == "-1") tagInfo.oneWay = true;
+                    else if (value == "no") tagInfo.oneWay = false;
+                    else RecordUnknown("oneway", value);
                     break;
                 case "surface":
                     switch (value) {
@@ -971,7 +1018,7 @@ namespace MinecraftMapper {
                         case "stone": tagInfo.surface = Surface.Stone; break;
                         case "railroad_ties": tagInfo.surface = Surface.RailroadTies; break;
                         default:
-                            Console.WriteLine("Unknown surface: {0}", value);
+                            RecordUnknown("surface", value);
                             break;
                     }
                     break;
@@ -983,6 +1030,7 @@ namespace MinecraftMapper {
                         case "gate": tagInfo.barrier = BarrierKind.Gate; break;
                         case "hedge": tagInfo.barrier = BarrierKind.Hedge; break;
                         case "retaining_wall": tagInfo.barrier = BarrierKind.RetainingWall; break;
+                        default: RecordUnknown("barrier", value); break;
                     }
                     break;
                 case "source":
@@ -992,21 +1040,22 @@ namespace MinecraftMapper {
                     double height;
                     if (Double.TryParse(value, out height)) {
                         tagInfo.stories = (int)(height / 4);
-                    }
+                    } else RecordUnknown("height", value);
                     break;
-                case "building:material": tagInfo.material = ReadMaterial(value); break;
-                case "building:colour": tagInfo.buildingColor = ParseColor(value); break;
+                case "building:material": tagInfo.material = ReadMaterial(value, "building material"); break;
+                case "building:colour": tagInfo.buildingColor = ParseColor(value, "building colour"); break;
                 case "building:levels":
                     int levels;
                     if (Int32.TryParse(value, out levels)) {
                         tagInfo.stories = levels;
-                    }
+                    } else RecordUnknown("building levels", value);
                     break;
                 case "sidewalk":
                     switch (value) {
                         case "both": tagInfo.sidewalk = Sidewalk.Both; break;
                         case "right": tagInfo.sidewalk = Sidewalk.Right; break;
                         case "left": tagInfo.sidewalk = Sidewalk.Left; break;
+                        default: RecordUnknown("sidewalk", value); break;
                     }
                     break;
                 case "parking":
@@ -1022,14 +1071,16 @@ namespace MinecraftMapper {
                     int level;
                     if (Int32.TryParse(value, out level)) {
                         tagInfo.level = level;
-                    }
+                    } else RecordUnknown("level", value);
                     break;
                 case "layer":
-                    tagInfo.layer = Int32.Parse(value);
+                    int layer;
+                    if (Int32.TryParse(value, out layer)) tagInfo.layer = layer;
+                    else RecordUnknown("layer", value);
                     break;
                 case "building:part":
                 case "building":
-                    tagInfo.building = ReadBuildingType(value);
+                    tagInfo.building = ReadBuildingType(value, key);
                     break;
                 case "addr:housenumber":
                     tagInfo.houseNumber = value;
@@ -1038,14 +1089,16 @@ namespace MinecraftMapper {
                     tagInfo.street = value;
                     break;
                 case "lanes":
-                    tagInfo.lanes = Convert.ToInt32(value);
+                    int lanes;
+                    if (Int32.TryParse(value, out lanes)) tagInfo.lanes = lanes;
+                    else RecordUnknown("lanes", value);
                     break;
                 case "covered":
                     switch (value) {
                         case "yes": tagInfo.covered = true; break;
                         case "no": tagInfo.covered = false; break;
                         default:
-                            Console.WriteLine("Unknown covered: " + value);
+                            RecordUnknown("covered", value);
                             break;
                     }
                     break;
@@ -1054,7 +1107,7 @@ namespace MinecraftMapper {
                         case "yes": tagInfo.shelter = true; break;
                         case "no": tagInfo.shelter = false; break;
                         default:
-                            Console.WriteLine("Unknown shelter: " + value);
+                            RecordUnknown("shelter", value);
                             break;
                     }
                     break;
@@ -1074,7 +1127,7 @@ namespace MinecraftMapper {
                         case "pedestrian_signals": break;
                         case "marked": break;
                         default:
-                            Console.WriteLine("Unknown crossing: " + value);
+                            RecordUnknown("crossing", value);
                             break;
                     }
                     break;
@@ -1085,7 +1138,7 @@ namespace MinecraftMapper {
                         case "narrow_gauge": tagInfo.railType = RailType.NarrowGauge; break;
                         case "funicular": tagInfo.railType = RailType.Funicular; break;
                         default:
-                            Console.WriteLine("Unknown rail: {0}", value);
+                            RecordUnknown("railway", value);
                             break;
                     }
                     break;
@@ -1133,17 +1186,20 @@ namespace MinecraftMapper {
                         case "corridor": break;
                         case "proposed":
                         default:
-                            Console.WriteLine("Unknown highway: " + value);
+                            RecordUnknown("highway", value);
                             break;
                     }
                     break;
                 case "name":
                     tagInfo.name = value;
                     break;
+                default:
+                    RecordUnknownTagKey(key);
+                    break;
             }
         }
 
-        private static Shop ReadShop(string value) {
+        private Shop ReadShop(string value) {
             switch (value) {
                 case "variety_store": return Shop.VarietyStore;
                 case "convenience": return Shop.Convenience;
@@ -1175,12 +1231,12 @@ namespace MinecraftMapper {
                 case "razors": return Shop.Razors;
                 case "jewelery": return Shop.Jewelery;
                 default:
-                    Console.WriteLine("Unknown shop: {0}", value);
+                    RecordUnknown("shop", value);
                     return Shop.None;
             }
         }
 
-        private static Parking ReadParking(string value) {
+        private Parking ReadParking(string value) {
             switch (value) {
                 case "surface": return Parking.Surface;
                 case "multi-storey": return Parking.MultiStory;
@@ -1190,10 +1246,11 @@ namespace MinecraftMapper {
                 case "carports": return Parking.CarPorts;
                 case "garage_boxes": return Parking.GarageBoxes;
             }
+            RecordUnknown("parking", value);
             return Parking.None;
         }
 
-        private static int? ParseDirection(string value) {
+        private int? ParseDirection(string value, string category) {
             int res;
             if (int.TryParse(value, out res)) {
                 return res;
@@ -1216,6 +1273,7 @@ namespace MinecraftMapper {
                 case "NW": return 315;
                 case "NNW": return 337;
             }
+            RecordUnknown(category, value);
             return null;
         }
 
@@ -1229,7 +1287,7 @@ namespace MinecraftMapper {
             }
         }
 
-        private static Color? ParseColor(string value) {
+        private Color? ParseColor(string value, string category) {
             if (value.StartsWith("#")) {
                 int r, g, b;
                 if (value.Length == 4) {
@@ -1270,10 +1328,11 @@ namespace MinecraftMapper {
             }
 
 
+            RecordUnknown(category, value);
             return null;
         }
 
-        private static BuildingType ReadBuildingType(string value) {
+        private BuildingType ReadBuildingType(string value, string category) {
             switch (value) {
                 case "yes": return BuildingType.Yes;
                 case "university": return BuildingType.University;
@@ -1288,6 +1347,7 @@ namespace MinecraftMapper {
                 case "residential":
                 case "terrace": return BuildingType.Unknown;
             }
+            RecordUnknown(category, value);
             return BuildingType.Unknown;
         }
 
@@ -1314,7 +1374,7 @@ namespace MinecraftMapper {
             Concrete
         }
 
-        private static Material ReadMaterial(string value) {
+        private Material ReadMaterial(string value, string category) {
             switch (value) {
                 case "sandstone": return Material.Sandstone;
                 case "brick": return Material.Brick;
@@ -1336,10 +1396,11 @@ namespace MinecraftMapper {
                 case "palm_leaves": return Material.PalmLeaves;
                 case "bamboo": return Material.Bamboo;
             }
+            RecordUnknown(category, value);
             return Material.None;
         }
 
-        private static Amenity ReadAmenity(string value) {
+        private Amenity ReadAmenity(string value) {
             Amenity amenity = Amenity.None;
             switch (value) {
                 case "school": amenity = Amenity.School; break;
@@ -1458,7 +1519,7 @@ namespace MinecraftMapper {
                 case "polling_station": break;
                 case "shoeshine": break;
                 default:
-                    Console.WriteLine("Unknown amenity: {0}", value);
+                    RecordUnknown("amenity", value);
                     break;
             }
 
