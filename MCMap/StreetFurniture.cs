@@ -200,6 +200,9 @@ namespace MinecraftMapper {
                     case PointFeatureKind.ParcelLocker:
                         DrawParcelLocker(feature, point, height, roadPoints, buildingPositions);
                         break;
+                    case PointFeatureKind.PostBox:
+                        DrawPostBox(point, height, roadPoints, buildingPositions);
+                        break;
                 }
                 occupiedPointFeatures.Add(point);
             }
@@ -328,14 +331,72 @@ namespace MinecraftMapper {
 
             for (int width = 0; width < 2; width++) {
                 for (int y = 0; y < 2; y++) {
-                    _bm.SetBlock(
+                    SetShulkerBox(
                         point.X + width * widthX,
                         height + y,
                         point.Z + width * widthZ,
                         block,
-                        facing: facing);
+                        facing);
                 }
             }
+        }
+
+        private void DrawPostBox(
+                BlockPosition point,
+                int height,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions) {
+            BlockFacing facing = FindPointFeatureFacing(point, roadPoints, buildingPositions);
+            SetShulkerBox(
+                point.X,
+                height,
+                point.Z,
+                AcquaticBlocks.BlueShulkerBox,
+                facing);
+
+            var sign = new TileEntitySign(TileEntitySign.HangingTypeId);
+            SetSignName(new List<string> { "USPS" }, sign);
+            BlockPosition signPoint = FindPostBoxSignPosition(
+                point, facing, roadPoints, buildingPositions);
+            _bm.SetBlock(
+                signPoint.X,
+                height,
+                signPoint.Z,
+                AcquaticBlocks.PaleOakWallHangingSign,
+                facing: facing,
+                waterlogged: false);
+            _bm.SetTileEntity(signPoint.X, height, signPoint.Z, sign);
+        }
+
+        private void SetShulkerBox(
+                int x, int y, int z, string block, BlockFacing facing) {
+            _bm.SetBlock(x, y, z, block, facing: facing);
+            _bm.SetTileEntity(x, y, z, new TileEntity("minecraft:shulker_box"));
+        }
+
+        private BlockPosition FindPostBoxSignPosition(
+                BlockPosition point,
+                BlockFacing facing,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions) {
+            BlockPosition[] candidates = facing == BlockFacing.East || facing == BlockFacing.West
+                ? new[] {
+                    new BlockPosition(point.X, point.Z - 1),
+                    new BlockPosition(point.X, point.Z + 1),
+                }
+                : new[] {
+                    new BlockPosition(point.X - 1, point.Z),
+                    new BlockPosition(point.X + 1, point.Z),
+                };
+
+            foreach (BlockPosition candidate in candidates) {
+                if (_conv.IsValidPoint(candidate) &&
+                        !roadPoints.ContainsKey(candidate) &&
+                        !buildingPositions.ContainsKey(candidate)) {
+                    return candidate;
+                }
+            }
+            return candidates[0];
         }
 
         private static BlockFacing FindPointFeatureFacing(

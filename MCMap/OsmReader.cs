@@ -868,7 +868,8 @@ namespace MinecraftMapper {
             UtilityPole,
             Flagpole,
             PublicBookcase,
-            ParcelLocker
+            ParcelLocker,
+            PostBox
         }
 
         public enum LandUse {
@@ -1103,6 +1104,8 @@ namespace MinecraftMapper {
                         tagInfo.pointFeature = PointFeatureKind.PublicBookcase;
                     } else if (value == "parcel_locker") {
                         tagInfo.pointFeature = PointFeatureKind.ParcelLocker;
+                    } else if (value == "post_box") {
+                        tagInfo.pointFeature = PointFeatureKind.PostBox;
                     } else {
                         tagInfo.amenity = ReadAmenity(value);
                     }
