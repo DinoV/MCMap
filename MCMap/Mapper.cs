@@ -152,6 +152,8 @@ namespace MinecraftMapper {
 
                 DrawBarriers(buildingPoints);
 
+                DrawPointFeatures(roadPoints, buildingPoints);
+
                 foreach (var node in _reader.Amenities) {
                     switch(node.Amenity) {
                         case Amenity.BicycleParking:

@@ -23,6 +23,7 @@ namespace MinecraftMapper {
         public readonly List<LeisureInfo> Leisures = new List<LeisureInfo>();
         public readonly List<CoastlineInfo> Coastlines = new List<CoastlineInfo>();
         public readonly List<PierInfo> Piers = new List<PierInfo>();
+        public readonly List<PointFeature> PointFeatures = new List<PointFeature>();
         private readonly string _sourceXml;
         private readonly HashSet<long> _ways;
         private readonly Dictionary<string, Dictionary<string, int>> _unknownValues =
@@ -397,6 +398,9 @@ namespace MinecraftMapper {
                         }
 
                         allNodes[id] = newNode;
+                        if (tags.pointFeature != PointFeatureKind.None) {
+                            PointFeatures.Add(new PointFeature(id, newNode, tags.pointFeature));
+                        }
                         if (includeInOrder) {
                             SortedDictionary<double, Node> longNodes;
                             if (!orderedNodes.TryGetValue(lat, out longNodes)) {
@@ -571,6 +575,18 @@ namespace MinecraftMapper {
                 }
             }
             PrintUnknownSummary();
+        }
+
+        internal class PointFeature {
+            public readonly long Id;
+            public readonly Node Node;
+            public readonly PointFeatureKind Kind;
+
+            public PointFeature(long id, Node node, PointFeatureKind kind) {
+                Id = id;
+                Node = node;
+                Kind = kind;
+            }
         }
 
         internal class LandInfo {
@@ -798,6 +814,7 @@ namespace MinecraftMapper {
             public bool coastline;
             public bool pier;
             public bool floating;
+            public PointFeatureKind pointFeature;
         }
 
         public enum Parking {
@@ -835,6 +852,13 @@ namespace MinecraftMapper {
             Gate,
             Hedge,
             RetainingWall
+        }
+
+        public enum PointFeatureKind {
+            None,
+            Bollard,
+            UtilityPole,
+            Flagpole
         }
 
         public enum LandUse {
@@ -912,6 +936,8 @@ namespace MinecraftMapper {
                     break;
                 case "man_made":
                     if (value == "pier") tagInfo.pier = true;
+                    else if (value == "utility_pole") tagInfo.pointFeature = PointFeatureKind.UtilityPole;
+                    else if (value == "flagpole") tagInfo.pointFeature = PointFeatureKind.Flagpole;
                     else RecordUnknown("man_made", value);
                     break;
                 case "floating":
@@ -1030,6 +1056,7 @@ namespace MinecraftMapper {
                         case "gate": tagInfo.barrier = BarrierKind.Gate; break;
                         case "hedge": tagInfo.barrier = BarrierKind.Hedge; break;
                         case "retaining_wall": tagInfo.barrier = BarrierKind.RetainingWall; break;
+                        case "bollard": tagInfo.pointFeature = PointFeatureKind.Bollard; break;
                         default: RecordUnknown("barrier", value); break;
                     }
                     break;

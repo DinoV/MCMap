@@ -9,6 +9,44 @@ using static MinecraftMapper.OsmReader;
 
 namespace MinecraftMapper {
     partial class Mapper {
+        private static readonly string[] FlagBannerBlocks = {
+            AcquaticBlocks.WhiteWallBanner, AcquaticBlocks.OrangeWallBanner,
+            AcquaticBlocks.MagentaWallBanner, AcquaticBlocks.LightBlueWallBanner,
+            AcquaticBlocks.YellowWallBanner, AcquaticBlocks.LimeWallBanner,
+            AcquaticBlocks.PinkWallBanner, AcquaticBlocks.GrayWallBanner,
+            AcquaticBlocks.LightGrayWallBanner, AcquaticBlocks.CyanWallBanner,
+            AcquaticBlocks.PurpleWallBanner, AcquaticBlocks.BlueWallBanner,
+            AcquaticBlocks.BrownWallBanner, AcquaticBlocks.GreenWallBanner,
+            AcquaticBlocks.RedWallBanner, AcquaticBlocks.BlackWallBanner,
+        };
+
+        private static readonly BannerColor[] FlagBannerColors = {
+            BannerColor.White, BannerColor.Orange, BannerColor.LightPurple, BannerColor.LightBlue,
+            BannerColor.Yellow, BannerColor.LightGreen, BannerColor.Pink, BannerColor.DaryGray,
+            BannerColor.LightGray, BannerColor.Cyan, BannerColor.Purple, BannerColor.Blue,
+            BannerColor.Brown, BannerColor.Green, BannerColor.Red, BannerColor.Black,
+        };
+
+        private static readonly HashSet<string> PointFeatureGroundCoverBlocks =
+            new HashSet<string> {
+                AcquaticBlocks.ShortGrass, AcquaticBlocks.TallGrass,
+                AcquaticBlocks.Fern, AcquaticBlocks.LargeFern,
+                AcquaticBlocks.DeadBush, AcquaticBlocks.Bush,
+                AcquaticBlocks.FireflyBush, AcquaticBlocks.LeafLitter,
+                AcquaticBlocks.Dandelion, AcquaticBlocks.Poppy,
+                AcquaticBlocks.BlueOrchid, AcquaticBlocks.Allium,
+                AcquaticBlocks.AzureBluet, AcquaticBlocks.RedTulip,
+                AcquaticBlocks.OrangeTulip, AcquaticBlocks.WhiteTulip,
+                AcquaticBlocks.PinkTulip, AcquaticBlocks.OxeyeDaisy,
+                AcquaticBlocks.Cornflower, AcquaticBlocks.LilyOfTheValley,
+                AcquaticBlocks.WitherRose, AcquaticBlocks.Torchflower,
+                AcquaticBlocks.Sunflower, AcquaticBlocks.Lilac,
+                AcquaticBlocks.RoseBush, AcquaticBlocks.Peony,
+                AcquaticBlocks.PitcherPlant, AcquaticBlocks.Wildflowers,
+                AcquaticBlocks.ClosedEyeblossom, AcquaticBlocks.OpenEyeblossom,
+                AcquaticBlocks.CactusFlower,
+            };
+
         private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             int cur = 0;
             foreach (var sign in _reader.Signs.OrderBy(x => MapOrder(_conv, x.Key))) {
@@ -95,6 +133,151 @@ namespace MinecraftMapper {
                     start = barrier.Nodes[i];
                 }
             }
+        }
+
+        private void DrawPointFeatures(
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions) {
+            int cur = 0;
+            var occupiedPointFeatures = new HashSet<BlockPosition>();
+            foreach (var feature in _reader.PointFeatures
+                    .OrderBy(item => MapOrder(_conv, item.Node))) {
+                if ((++cur % 100) == 0) SaveBlocks();
+                var point = _conv.ToBlock(feature.Node.Lat, feature.Node.Long);
+                point = FindClosestFreePointFeatureLocation(
+                    point, roadPoints, buildingPositions, occupiedPointFeatures);
+                if (!_conv.IsValidPoint(point) || buildingPositions.ContainsKey(point)) continue;
+                int groundHeight = GetPointFeatureGroundHeight(point);
+                ClearPointFeatureGroundCover(point, groundHeight);
+                int height = groundHeight + 1;
+                WriteLine("Point feature {0} {1} ({2})", point, feature.Kind, feature.Id);
+                switch (feature.Kind) {
+                    case PointFeatureKind.Bollard:
+                        DrawWallColumn(point, height, 1, AcquaticBlocks.SandstoneWall);
+                        break;
+                    case PointFeatureKind.UtilityPole:
+                        DrawWallColumn(point, height, 10, AcquaticBlocks.RedSandstoneWall);
+                        break;
+                    case PointFeatureKind.Flagpole:
+                        DrawWallColumn(point, height, 5, AcquaticBlocks.DioriteWall);
+                        DrawFlagpoleBanner(feature, point, height + 4);
+                        break;
+                }
+                occupiedPointFeatures.Add(point);
+            }
+        }
+
+        private BlockPosition FindClosestFreePointFeatureLocation(
+                BlockPosition origin,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions,
+                HashSet<BlockPosition> occupiedPointFeatures) {
+            const int SearchRadius = 6;
+            var surfaceCounts = new Dictionary<int, int>();
+            for (int x = -SearchRadius; x <= SearchRadius; x++) {
+                for (int z = -SearchRadius; z <= SearchRadius; z++) {
+                    var candidate = new BlockPosition(origin.X + x, origin.Z + z);
+                    if (!IsFreePointFeatureColumn(
+                            candidate, roadPoints, buildingPositions, occupiedPointFeatures)) {
+                        continue;
+                    }
+                    int surface = GetPointFeatureGroundHeight(candidate);
+                    int count;
+                    surfaceCounts[surface] = surfaceCounts.TryGetValue(surface, out count)
+                        ? count + 1
+                        : 1;
+                }
+            }
+            if (surfaceCounts.Count == 0) {
+                return origin;
+            }
+
+            int terrainHeight = surfaceCounts
+                .OrderByDescending(item => item.Value)
+                .ThenBy(item => item.Key)
+                .First().Key;
+            for (int distance = 0; distance <= SearchRadius * 2; distance++) {
+                for (int x = -SearchRadius; x <= SearchRadius; x++) {
+                    int zDistance = distance - Math.Abs(x);
+                    if (zDistance < 0 || zDistance > SearchRadius) {
+                        continue;
+                    }
+                    var first = new BlockPosition(origin.X + x, origin.Z - zDistance);
+                    if (IsFreePointFeatureLocationAtHeight(
+                            first, terrainHeight, roadPoints, buildingPositions, occupiedPointFeatures)) {
+                        return first;
+                    }
+                    if (zDistance != 0) {
+                        var second = new BlockPosition(origin.X + x, origin.Z + zDistance);
+                        if (IsFreePointFeatureLocationAtHeight(
+                                second, terrainHeight, roadPoints, buildingPositions, occupiedPointFeatures)) {
+                            return second;
+                        }
+                    }
+                }
+            }
+            return origin;
+        }
+
+        private bool IsFreePointFeatureLocationAtHeight(
+                BlockPosition point,
+                int terrainHeight,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions,
+                HashSet<BlockPosition> occupiedPointFeatures) {
+            return IsFreePointFeatureColumn(
+                    point, roadPoints, buildingPositions, occupiedPointFeatures) &&
+                Math.Abs(GetPointFeatureGroundHeight(point) - terrainHeight) <= 1;
+        }
+
+        private bool IsFreePointFeatureColumn(
+                BlockPosition point,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions,
+                HashSet<BlockPosition> occupiedPointFeatures) {
+            return _conv.IsValidPoint(point) &&
+                !roadPoints.ContainsKey(point) &&
+                !buildingPositions.ContainsKey(point) &&
+                !occupiedPointFeatures.Contains(point);
+        }
+
+        private int GetPointFeatureGroundHeight(BlockPosition point) {
+            int height = GetHeight(point);
+            while (height > 0 && PointFeatureGroundCoverBlocks.Contains(
+                    _bm.GetStringID(point.X, height, point.Z))) {
+                height--;
+            }
+            return height;
+        }
+
+        private void ClearPointFeatureGroundCover(BlockPosition point, int groundHeight) {
+            for (int y = groundHeight + 1; y <= groundHeight + 3; y++) {
+                string block = _bm.GetStringID(point.X, y, point.Z);
+                if (PointFeatureGroundCoverBlocks.Contains(block)) {
+                    _bm.SetBlock(point.X, y, point.Z, AcquaticBlocks.Air);
+                } else if (block != AcquaticBlocks.Air) {
+                    break;
+                }
+            }
+        }
+
+        private void DrawWallColumn(BlockPosition point, int height, int blocks, string block) {
+            for (int y = 0; y < blocks; y++) {
+                _bm.SetBlock(point.X, height + y, point.Z, block,
+                    north: false, east: false, south: false, west: false, up: false);
+            }
+        }
+
+        private void DrawFlagpoleBanner(PointFeature feature, BlockPosition point, int height) {
+            int color = (int)(unchecked((ulong)feature.Id) % (ulong)FlagBannerBlocks.Length);
+            var bannerBlock = new AlphaBlock(BlockType.WALL_BANNER);
+            var banner = bannerBlock.GetTileEntity() as TileEntityBanner;
+            banner.BaseColor = FlagBannerColors[color];
+            banner.Patterns = new BannerPattern[0];
+            int bannerX = point.X + 1;
+            _bm.SetBlock(bannerX, height, point.Z, FlagBannerBlocks[color],
+                facing: BlockFacing.East);
+            _bm.SetTileEntity(bannerX, height, point.Z, banner);
         }
 
         private void DrawStreetLamp(Direction direction, BlockPosition center) {
