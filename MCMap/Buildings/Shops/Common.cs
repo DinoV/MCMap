@@ -114,6 +114,9 @@ namespace MinecraftMapper {
                 CreateSupermarketDefinition(), CreateGiftStoreDefinition(),
                 CreateBookStoreDefinition(),
                 CreateFloristDefinition(),
+                CreateDeliDefinition(), CreateCopyShopDefinition(),
+                CreatePastryShopDefinition(), CreateButcherDefinition(),
+                CreateStationeryStoreDefinition(),
             }
                 .ToDictionary(definition => definition.Type);
 

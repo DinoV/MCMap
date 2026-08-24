@@ -180,6 +180,10 @@ namespace MinecraftMapper {
             Gift,
             Books,
             Florist,
+            Deli,
+            CopyShop,
+            Pastry,
+            Butcher,
         }
 
         public enum Amenity {
@@ -1143,6 +1147,13 @@ namespace MinecraftMapper {
                 case "variety_store": return Shop.VarietyStore;
                 case "convenience": return Shop.Convenience;
                 case "stationary": return Shop.Stationary;
+                case "stationery": return Shop.Stationary;
+                case "deli": return Shop.Deli;
+                case "copyshop": return Shop.CopyShop;
+                case "pastry": return Shop.Pastry;
+                case "confectionery": return Shop.Pastry;
+                case "confectionary": return Shop.Pastry;
+                case "butcher": return Shop.Butcher;
                 case "car_repair": return Shop.CarRepair;
                 case "hairdresser": return Shop.HairDresser;
                 case "bakery": return Shop.Bakery;
