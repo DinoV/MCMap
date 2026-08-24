@@ -128,6 +128,7 @@ namespace MinecraftMapper {
             None,
             StreetLamp,
             TrafficSignal,
+            RailroadCrossing,
             Stop,
             TrafficSign
         }
@@ -398,6 +399,9 @@ namespace MinecraftMapper {
                         }
 
                         allNodes[id] = newNode;
+                        if (tags.levelCrossing && tags.crossing == CrossingType.TrafficSignals) {
+                            tags.signType = SignType.RailroadCrossing;
+                        }
                         if (tags.pointFeature != PointFeatureKind.None) {
                             PointFeatures.Add(new PointFeature(id, newNode, tags.pointFeature));
                         }
@@ -811,6 +815,7 @@ namespace MinecraftMapper {
             public LandUse landUse;
             public Leisure leisuire;
             public RailType railType;
+            public bool levelCrossing;
             public bool coastline;
             public bool pier;
             public bool floating;
@@ -1164,6 +1169,7 @@ namespace MinecraftMapper {
                         case "light_rail": tagInfo.railType = RailType.LightRail; break;
                         case "narrow_gauge": tagInfo.railType = RailType.NarrowGauge; break;
                         case "funicular": tagInfo.railType = RailType.Funicular; break;
+                        case "level_crossing": tagInfo.levelCrossing = true; break;
                         default:
                             RecordUnknown("railway", value);
                             break;

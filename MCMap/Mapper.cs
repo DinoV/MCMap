@@ -145,6 +145,8 @@ namespace MinecraftMapper {
 
                 DrawRails();
 
+                DrawRailroadCrossings(roadPoints);
+
                 DrawStreetLamps(roadPoints);
                 var buildingPoints = DrawBuildings();
 

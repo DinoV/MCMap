@@ -9,6 +9,8 @@ using static MinecraftMapper.OsmReader;
 
 namespace MinecraftMapper {
     partial class Mapper {
+        private const int TrafficLightHeight = 8;
+
         private void DrawSigns(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             List<string> names = new List<string>(4);
             IntersectionBoundsFinder boundsFinder = new IntersectionBoundsFinder(roadPoints);
@@ -497,7 +499,6 @@ namespace MinecraftMapper {
 
         private void DrawTrafficLight(List<string> name, BlockPosition target, Direction direction, int lanes, bool sidewalk) {
             var height = _bm.GetHeight(target.X, target.Z);
-            const int TrafficLightHeight = 8;
             WriteLine("Sign {0} TrafficLight", target);
             // draw the vertical traffic light pieces...
             // We start with a piece of polished andisite, then an anvil, and have an
