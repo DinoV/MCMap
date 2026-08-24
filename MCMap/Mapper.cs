@@ -202,18 +202,26 @@ namespace MinecraftMapper {
         }
 
         private int GetHeight(BlockPosition signLoc) {
-            var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
-            if (groundHeight == 0) {
+            var chunk = _bm.GetChunk(signLoc.X, 0, signLoc.Z);
+            if (chunk == null) {
                 return 0;
             }
-            var b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
-            while (b.ID == BlockType.AIR) {
+
+            int minimumY = chunk.MinimumY;
+            int maximumY = minimumY + chunk.Blocks.YDim - 1;
+            var groundHeight = _bm.GetHeight(signLoc.X, signLoc.Z);
+            groundHeight = Math.Min(groundHeight, maximumY);
+            while (groundHeight >= minimumY) {
+                var block = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
+                if (block != null && block.ID != BlockType.AIR) {
+                    return groundHeight;
+                }
+
                 // GetHeight doesn't always work so well :P
                 groundHeight--;
-                b = _bm.GetBlock(signLoc.X, groundHeight, signLoc.Z);
             }
 
-            return groundHeight;
+            return 0;
         }
 
     }
