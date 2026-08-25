@@ -90,6 +90,8 @@ namespace MinecraftMapper {
                             }
                         }
 
+                        AddRoundaboutRoadNames(intersectionPoint, segment.Way, names);
+
                         if (names.Count == 0) {
                             continue;
                         }
@@ -99,6 +101,45 @@ namespace MinecraftMapper {
                             DrawTrafficLight(roadPoints, names, segment.Way, pos, angle.Value, direction);
                         } else {
                             DrawRoadSign(signType?.Type ?? OsmReader.SignType.None, names, roadPoints, pos, angle.Value, segment.Way);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void AddRoundaboutRoadNames(
+                OsmReader.Node intersection,
+                OsmReader.Way currentRoad,
+                List<string> names) {
+            List<OsmReader.Way> intersectingWays;
+            if (!_reader.RoadsByNode.TryGetValue(intersection, out intersectingWays)) {
+                return;
+            }
+
+            var pending = new Queue<OsmReader.Way>(
+                intersectingWays.Where(way => way.Roundabout));
+            var visited = new HashSet<OsmReader.Way>();
+            while (pending.Count > 0) {
+                OsmReader.Way roundabout = pending.Dequeue();
+                if (!visited.Add(roundabout)) {
+                    continue;
+                }
+
+                foreach (OsmReader.Node node in roundabout.Nodes) {
+                    List<OsmReader.Way> connectedWays;
+                    if (!_reader.RoadsByNode.TryGetValue(node, out connectedWays)) {
+                        continue;
+                    }
+                    foreach (OsmReader.Way connected in connectedWays) {
+                        if (connected.Roundabout) {
+                            if (!visited.Contains(connected)) {
+                                pending.Enqueue(connected);
+                            }
+                        } else if (connected != currentRoad &&
+                                connected.Name != null &&
+                                connected.Name != currentRoad.Name &&
+                                !names.Contains(connected.Name)) {
+                            names.Add(connected.Name);
                         }
                     }
                 }
