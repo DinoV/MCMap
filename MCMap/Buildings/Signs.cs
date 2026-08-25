@@ -173,6 +173,16 @@ namespace MinecraftMapper {
             DrawSign(signLoc, direction, BlockType.SIGN_POST, null, text);
         }
 
+        static string[] _sign_types = new[] {
+            AcquaticBlocks.OakSign,
+            AcquaticBlocks.JungleSign,
+            AcquaticBlocks.MangroveSign,
+            AcquaticBlocks.PaleOakSign,
+            AcquaticBlocks.SpruceSign,
+            AcquaticBlocks.DarkOakSign,
+            AcquaticBlocks.CherrySign,
+        };
+
         private void DrawSign(BlockPosition signLoc, Direction direction, int signType = BlockType.SIGN_POST, int? height = null, params string[] text) {
             if (!_conv.IsValidPoint(signLoc)) {
                 return;
@@ -189,7 +199,8 @@ namespace MinecraftMapper {
             }
 
             _bm.SetBlock(
-                signLoc.X, height.Value, signLoc.Z, AcquaticBlocks.OakSign,
+                signLoc.X, height.Value, signLoc.Z,
+                _sign_types[(signLoc.X + signLoc.Z) % _sign_types.Length],
                 rotation: (int)direction);
             _bm.SetTileEntity(signLoc.X, height.Value, signLoc.Z, ent);
         }

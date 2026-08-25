@@ -442,7 +442,7 @@ namespace MinecraftMapper {
 
             if (_conv.IsValidPoint(target)) {
                 _bm.SetBlock(
-                    target.X, height, target.Z, AcquaticBlocks.OakSign,
+                    target.X, height, target.Z, AcquaticBlocks.WarpedSign,
                     rotation: (int)direction);
                 _bm.SetTileEntity(target.X, height, target.Z, ent);
             }
@@ -503,7 +503,7 @@ namespace MinecraftMapper {
                     var signHeight = _bm.GetHeight(signX, signZ);
                     _bm.SetBlock(
                         signX, signHeight, signZ,
-                        AcquaticBlocks.OakSign,
+                        AcquaticBlocks.WarpedSign,
                         rotation: (int)direction);
                     _bm.SetTileEntity(signX, signHeight, signZ, ent);
                 }
