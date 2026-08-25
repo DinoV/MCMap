@@ -203,6 +203,12 @@ namespace MinecraftMapper {
                     case PointFeatureKind.PostBox:
                         DrawPostBox(point, height, roadPoints, buildingPositions);
                         break;
+                    case PointFeatureKind.RecyclingPoint:
+                        _bm.SetBlock(point.X, height, point.Z, AcquaticBlocks.WaterCauldron, level: 3);
+                        break;
+                    case PointFeatureKind.WasteBasket:
+                        _bm.SetBlock(point.X, height, point.Z, AcquaticBlocks.LavaCauldron);
+                        break;
                 }
                 occupiedPointFeatures.Add(point);
             }

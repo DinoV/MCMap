@@ -869,7 +869,9 @@ namespace MinecraftMapper {
             Flagpole,
             PublicBookcase,
             ParcelLocker,
-            PostBox
+            PostBox,
+            RecyclingPoint,
+            WasteBasket
         }
 
         public enum LandUse {
@@ -1106,6 +1108,10 @@ namespace MinecraftMapper {
                         tagInfo.pointFeature = PointFeatureKind.ParcelLocker;
                     } else if (value == "post_box") {
                         tagInfo.pointFeature = PointFeatureKind.PostBox;
+                    } else if (value == "recycling_point") {
+                        tagInfo.pointFeature = PointFeatureKind.RecyclingPoint;
+                    } else if (value == "waste_basket") {
+                        tagInfo.pointFeature = PointFeatureKind.WasteBasket;
                     } else {
                         tagInfo.amenity = ReadAmenity(value);
                     }
