@@ -230,6 +230,8 @@ namespace MinecraftMapper {
                     }
                 }
             }
+
+            DrawRoundaboutCenters(roadPoints);
             SaveBlocks();
 
             return roadPoints;

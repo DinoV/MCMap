@@ -27,26 +27,6 @@ namespace MinecraftMapper {
             BannerColor.Brown, BannerColor.Green, BannerColor.Red, BannerColor.Black,
         };
 
-        private static readonly HashSet<string> PointFeatureGroundCoverBlocks =
-            new HashSet<string> {
-                AcquaticBlocks.ShortGrass, AcquaticBlocks.TallGrass,
-                AcquaticBlocks.Fern, AcquaticBlocks.LargeFern,
-                AcquaticBlocks.DeadBush, AcquaticBlocks.Bush,
-                AcquaticBlocks.FireflyBush, AcquaticBlocks.LeafLitter,
-                AcquaticBlocks.Dandelion, AcquaticBlocks.Poppy,
-                AcquaticBlocks.BlueOrchid, AcquaticBlocks.Allium,
-                AcquaticBlocks.AzureBluet, AcquaticBlocks.RedTulip,
-                AcquaticBlocks.OrangeTulip, AcquaticBlocks.WhiteTulip,
-                AcquaticBlocks.PinkTulip, AcquaticBlocks.OxeyeDaisy,
-                AcquaticBlocks.Cornflower, AcquaticBlocks.LilyOfTheValley,
-                AcquaticBlocks.WitherRose, AcquaticBlocks.Torchflower,
-                AcquaticBlocks.Sunflower, AcquaticBlocks.Lilac,
-                AcquaticBlocks.RoseBush, AcquaticBlocks.Peony,
-                AcquaticBlocks.PitcherPlant, AcquaticBlocks.Wildflowers,
-                AcquaticBlocks.ClosedEyeblossom, AcquaticBlocks.OpenEyeblossom,
-                AcquaticBlocks.CactusFlower,
-            };
-
         private static readonly string[] PublicBookcaseFenceBlocks = {
             AcquaticBlocks.OakFence,
             AcquaticBlocks.SpruceFence,
@@ -78,6 +58,26 @@ namespace MinecraftMapper {
             AcquaticBlocks.RedShulkerBox,
             AcquaticBlocks.BlackShulkerBox,
         };
+
+        private static readonly HashSet<string> PointFeatureGroundCoverBlocks =
+            new HashSet<string> {
+                AcquaticBlocks.ShortGrass, AcquaticBlocks.TallGrass,
+                AcquaticBlocks.Fern, AcquaticBlocks.LargeFern,
+                AcquaticBlocks.DeadBush, AcquaticBlocks.Bush,
+                AcquaticBlocks.FireflyBush, AcquaticBlocks.LeafLitter,
+                AcquaticBlocks.Dandelion, AcquaticBlocks.Poppy,
+                AcquaticBlocks.BlueOrchid, AcquaticBlocks.Allium,
+                AcquaticBlocks.AzureBluet, AcquaticBlocks.RedTulip,
+                AcquaticBlocks.OrangeTulip, AcquaticBlocks.WhiteTulip,
+                AcquaticBlocks.PinkTulip, AcquaticBlocks.OxeyeDaisy,
+                AcquaticBlocks.Cornflower, AcquaticBlocks.LilyOfTheValley,
+                AcquaticBlocks.WitherRose, AcquaticBlocks.Torchflower,
+                AcquaticBlocks.Sunflower, AcquaticBlocks.Lilac,
+                AcquaticBlocks.RoseBush, AcquaticBlocks.Peony,
+                AcquaticBlocks.PitcherPlant, AcquaticBlocks.Wildflowers,
+                AcquaticBlocks.ClosedEyeblossom, AcquaticBlocks.OpenEyeblossom,
+                AcquaticBlocks.CactusFlower,
+            };
 
         private void DrawStreetLamps(Dictionary<BlockPosition, RoadPoint> roadPoints) {
             int cur = 0;
@@ -239,6 +239,9 @@ namespace MinecraftMapper {
                 return origin;
             }
 
+            // Street furniture occupies only a few columns, while the surrounding terrain
+            // height is repeated. Prefer the most common local height; on ties, prefer the
+            // lower one so roofs and other elevated structures cannot become "ground."
             int terrainHeight = surfaceCounts
                 .OrderByDescending(item => item.Value)
                 .ThenBy(item => item.Key)
@@ -277,17 +280,6 @@ namespace MinecraftMapper {
                 Math.Abs(GetPointFeatureGroundHeight(point) - terrainHeight) <= 1;
         }
 
-        private bool IsFreePointFeatureColumn(
-                BlockPosition point,
-                Dictionary<BlockPosition, RoadPoint> roadPoints,
-                Dictionary<BlockPosition, int> buildingPositions,
-                HashSet<BlockPosition> occupiedPointFeatures) {
-            return _conv.IsValidPoint(point) &&
-                !roadPoints.ContainsKey(point) &&
-                !buildingPositions.ContainsKey(point) &&
-                !occupiedPointFeatures.Contains(point);
-        }
-
         private int GetPointFeatureGroundHeight(BlockPosition point) {
             int height = GetHeight(point);
             while (height > 0 && PointFeatureGroundCoverBlocks.Contains(
@@ -306,6 +298,17 @@ namespace MinecraftMapper {
                     break;
                 }
             }
+        }
+
+        private bool IsFreePointFeatureColumn(
+                BlockPosition point,
+                Dictionary<BlockPosition, RoadPoint> roadPoints,
+                Dictionary<BlockPosition, int> buildingPositions,
+                HashSet<BlockPosition> occupiedPointFeatures) {
+            return _conv.IsValidPoint(point) &&
+                !roadPoints.ContainsKey(point) &&
+                !buildingPositions.ContainsKey(point) &&
+                !occupiedPointFeatures.Contains(point);
         }
 
         private void DrawPublicBookcase(PointFeature feature, BlockPosition point, int height) {
