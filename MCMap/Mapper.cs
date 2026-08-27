@@ -161,27 +161,7 @@ namespace MinecraftMapper {
                         case Amenity.BicycleParking:
                             var point = _conv.ToBlock(node.Lat, node.Long);
                             Console.WriteLine("Bike rack {0} {1}", point, node.Id);
-                            _bm.SetBlock(
-                                point.X,
-                                _bm.GetHeight(point.X, point.Z),
-                                point.Z,
-                                AcquaticBlocks.NetherBrickFence,
-                                north: false, east: false, south: false, west: false
-                            );
-                            _bm.SetBlock(
-                                point.X + 1,
-                                _bm.GetHeight(point.X + 1, point.Z),
-                                point.Z,
-                                AcquaticBlocks.NetherBrickFence,
-                                north: false, east: false, south: false, west: false
-                            );
-                            _bm.SetBlock(
-                                point.X + 2,
-                                _bm.GetHeight(point.X + 2, point.Z),
-                                point.Z,
-                                AcquaticBlocks.NetherBrickFence,
-                                north: false, east: false, south: false, west: false
-                            );
+                            DrawBikeRack(point, roadPoints);
                             break;
                     }
                 }
@@ -193,6 +173,59 @@ namespace MinecraftMapper {
             DateTime done = DateTime.Now;
             WriteLine("All done, data processing {0}, total {1}", dataProcessing - startTime, done - startTime);
             Console.ReadLine();
+        }
+
+        private void DrawBikeRack(
+                BlockPosition point, Dictionary<BlockPosition, RoadPoint> roadPoints) {
+            const int RoadSearchRadius = 16;
+            RoadSegment? nearestSegment = null;
+            int nearestDistanceSquared = int.MaxValue;
+
+            for (int x = point.X - RoadSearchRadius; x <= point.X + RoadSearchRadius; x++) {
+                for (int z = point.Z - RoadSearchRadius; z <= point.Z + RoadSearchRadius; z++) {
+                    RoadPoint roadPoint;
+                    if (!roadPoints.TryGetValue(new BlockPosition(x, z), out roadPoint) ||
+                            roadPoint.Segments.Count == 0) {
+                        continue;
+                    }
+
+                    int xDistance = x - point.X;
+                    int zDistance = z - point.Z;
+                    int distanceSquared = xDistance * xDistance + zDistance * zDistance;
+                    if (distanceSquared < nearestDistanceSquared) {
+                        nearestDistanceSquared = distanceSquared;
+                        nearestSegment = roadPoint.Segments[0];
+                    }
+                }
+            }
+
+            int xStep = 1;
+            int zStep = 0;
+            if (nearestSegment.HasValue) {
+                var start = _conv.ToBlock(
+                    nearestSegment.Value.Start.Lat, nearestSegment.Value.Start.Long);
+                var end = _conv.ToBlock(
+                    nearestSegment.Value.End.Lat, nearestSegment.Value.End.Long);
+                if (Math.Abs(end.Z - start.Z) > Math.Abs(end.X - start.X)) {
+                    xStep = 0;
+                    zStep = 1;
+                }
+            }
+
+            for (int i = 0; i < 3; i++) {
+                int x = point.X + i * xStep;
+                int z = point.Z + i * zStep;
+                _bm.SetBlock(
+                    x,
+                    _bm.GetHeight(x, z),
+                    z,
+                    AcquaticBlocks.PaleOakFence,
+                    north: zStep != 0 && i > 0,
+                    east: xStep != 0 && i < 2,
+                    south: zStep != 0 && i < 2,
+                    west: xStep != 0 && i > 0
+                );
+            }
         }
 
         private void Save() {
