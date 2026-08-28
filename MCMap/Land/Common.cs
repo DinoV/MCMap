@@ -137,9 +137,7 @@ namespace MinecraftMapper {
                         continue;
                     }
 
-                    int height = baseHeights[point.Block] = GetHeight(point.Block);
-
-                    SetMappedBlock(_bm, point.Block.X, height, point.Block.Z, blockType, blockData);
+                    baseHeights[point.Block] = GetPointFeatureGroundHeight(point.Block);
                 }
 
                 start = parking.Nodes[i];
@@ -147,7 +145,57 @@ namespace MinecraftMapper {
 
             int top, left, bottom, right;
             CalculateBounds(parking.Nodes, out top, out left, out bottom, out right);
-            FillArea(top, left, bottom, right, baseHeights, blockType, blockData);
+            var polygon = parking.Nodes
+                .Select(node => _conv.ToBlock(node.Lat, node.Long))
+                .ToArray();
+            var parkingPoints = new HashSet<BlockPosition>(baseHeights.Keys);
+            for (int z = top; z <= bottom; z++) {
+                for (int x = left; x <= right; x++) {
+                    var point = new BlockPosition(x, z);
+                    if (_conv.IsValidPoint(point) &&
+                            IsInsidePolygon(x + 0.5, z + 0.5, polygon)) {
+                        parkingPoints.Add(point);
+                    }
+                }
+            }
+            if (parkingPoints.Count == 0) {
+                return;
+            }
+
+            var groundHeights = parkingPoints.ToDictionary(
+                point => point,
+                point => GetPointFeatureGroundHeight(point));
+            int parkingHeight = groundHeights.Values
+                .GroupBy(height => height)
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => Math.Abs(group.Key - groundHeights.Values.Average()))
+                .ThenBy(group => group.Key)
+                .First().Key;
+
+            foreach (var point in parkingPoints) {
+                BuildParkingLotColumn(
+                    point, groundHeights[point], parkingHeight, blockType, blockData);
+            }
+        }
+
+        private void BuildParkingLotColumn(
+                BlockPosition point,
+                int groundHeight,
+                int parkingHeight,
+                int blockType,
+                int blockData) {
+            int originalTop = GetHeight(point);
+            for (int y = groundHeight + 1; y < parkingHeight; y++) {
+                _bm.SetBlock(point.X, y, point.Z, AcquaticBlocks.Dirt);
+            }
+
+            SetMappedBlock(
+                _bm, point.X, parkingHeight, point.Z, blockType, blockData);
+
+            int clearThrough = Math.Max(originalTop, parkingHeight + 2);
+            for (int y = parkingHeight + 1; y <= clearThrough; y++) {
+                _bm.SetBlock(point.X, y, point.Z, AcquaticBlocks.Air);
+            }
         }
 
         private void DrawCoastlines() {
