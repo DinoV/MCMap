@@ -156,6 +156,8 @@ namespace MinecraftMapper {
 
                 DrawPointFeatures(roadPoints, buildingPoints);
 
+                DrawIconicSigns();
+
                 foreach (var node in _reader.Amenities) {
                     switch(node.Amenity) {
                         case Amenity.BicycleParking:
