@@ -180,7 +180,7 @@ namespace MinecraftMapper {
                     point, roadPoints, buildingPositions, occupiedPointFeatures);
                 if (!_conv.IsValidPoint(point) || buildingPositions.ContainsKey(point)) continue;
                 int groundHeight = GetPointFeatureGroundHeight(point);
-                ClearPointFeatureGroundCover(point, groundHeight);
+                ClearPointFeatureGroundCover(point);
                 int height = groundHeight + 1;
                 WriteLine("Point feature {0} {1} ({2})", point, feature.Kind, feature.Id);
                 switch (feature.Kind) {
@@ -289,7 +289,26 @@ namespace MinecraftMapper {
             return height;
         }
 
-        private void ClearPointFeatureGroundCover(BlockPosition point, int groundHeight) {
+        private void ClearPointFeatureGroundCover(BlockPosition center) {
+            const int ClearRadius = 4;
+            for (int xOffset = -ClearRadius; xOffset <= ClearRadius; xOffset++) {
+                for (int zOffset = -ClearRadius; zOffset <= ClearRadius; zOffset++) {
+                    if (xOffset * xOffset + zOffset * zOffset > ClearRadius * ClearRadius) {
+                        continue;
+                    }
+                    var point = new BlockPosition(
+                        center.X + xOffset, center.Z + zOffset);
+                    if (!_conv.IsValidPoint(point)) {
+                        continue;
+                    }
+                    ClearPointFeatureGroundCoverColumn(
+                        point, GetPointFeatureGroundHeight(point));
+                }
+            }
+        }
+
+        private void ClearPointFeatureGroundCoverColumn(
+                BlockPosition point, int groundHeight) {
             for (int y = groundHeight + 1; y <= groundHeight + 3; y++) {
                 string block = _bm.GetStringID(point.X, y, point.Z);
                 if (PointFeatureGroundCoverBlocks.Contains(block)) {
