@@ -292,7 +292,7 @@ namespace MinecraftMapper {
                 out bool renderedContainer) {
             renderedContainer = false;
             if (!shop.FloorPoints.Contains(point) || occupied.Contains(point) ||
-                    doors.Any(door => ManhattanDistance(point, door) <= 2) ||
+                    IsShopDoorApproach(point, doors) ||
                     _bm.GetStringID(point.X, displayHeight, point.Z) != AcquaticBlocks.Air) {
                 return false;
             }
@@ -335,6 +335,13 @@ namespace MinecraftMapper {
             }
             occupied.Add(point);
             return true;
+        }
+
+        private static bool IsShopDoorApproach(BlockPosition point, HashSet<BlockPosition> doors) {
+            // Leave enough room to enter and turn after passing through the door.  A two-block
+            // exclusion allowed the first container in an aisle to be placed directly in front
+            // of the doorway, at a Manhattan distance of three.
+            return doors.Any(door => ManhattanDistance(point, door) <= 3);
         }
 
         private void DrawInteriorShopSection(ShopPlacement shop, ShopSection section,

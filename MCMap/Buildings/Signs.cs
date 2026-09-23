@@ -112,34 +112,78 @@ namespace MinecraftMapper {
                     buildingWallPoint = signPoint;
                 }
 
-                OsmReader.Node comparison = NextClosestPoint(signPoint, closestRoadPoint, points);
-
-                // Figure out the direction of the house vs the road...
-                //var pointOnRoad = FindPerpindicualPoint(signPoint, comparison, closestRoadPoint);
-                //var angle = Math.Atan2(signPoint.Lat - pointOnRoad.Lat, signPoint.Long - pointOnRoad.Long) * 180 / Math.PI;
-                var angle = Math.Atan2(signPoint.Lat - buildingWallPoint.Lat, signPoint.Long - buildingWallPoint.Long) * 180 / Math.PI;
-                var buildingLoc = _conv.ToBlock(buildingWallPoint.Lat, buildingWallPoint.Long);
-                if ((angle > -45 && angle < 45) || angle > 135 || angle < -135) {
-                    if (closestRoadPoint.Long > signPoint.Long) { // this comparison is backwards due to negative longitude in Seattle
-                        signLoc = new BlockPosition(buildingLoc.X + 1, buildingLoc.Z);
-                        direction = Direction.East;
-                    } else {
-                        signLoc = new BlockPosition(buildingLoc.X - 1, buildingLoc.Z);
-                        direction = Direction.West;
-                    }
-                } else {
-                    if (closestRoadPoint.Lat < signPoint.Lat) {
-                        signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z + 1);
-                        direction = Direction.South;
-                    } else {
-                        signLoc = new BlockPosition(buildingLoc.X, buildingLoc.Z - 1);
-                        direction = Direction.North;
-                    }
+                // Put the address sign immediately outside the portion of this building nearest
+                // the named road.  Measure against the complete road segments rather than just
+                // their OSM nodes; the nearest node can be past a corner and select the wrong wall.
+                BlockPosition buildingLoc;
+                double frontageRoadX, frontageRoadZ;
+                if (!TryFindClosestRoadFrontage(baseHeights.Keys, roads,
+                        out buildingLoc, out frontageRoadX, out frontageRoadZ)) {
+                    buildingLoc = _conv.ToBlock(buildingWallPoint.Lat, buildingWallPoint.Long);
+                    frontageRoadX = roadLoc.X;
+                    frontageRoadZ = roadLoc.Z;
                 }
+
+                var candidates = new[] {
+                    new { Point = new BlockPosition(buildingLoc.X + 1, buildingLoc.Z), Direction = Direction.East },
+                    new { Point = new BlockPosition(buildingLoc.X - 1, buildingLoc.Z), Direction = Direction.West },
+                    new { Point = new BlockPosition(buildingLoc.X, buildingLoc.Z + 1), Direction = Direction.South },
+                    new { Point = new BlockPosition(buildingLoc.X, buildingLoc.Z - 1), Direction = Direction.North },
+                };
+                var placement = candidates
+                    .OrderBy(candidate => baseHeights.ContainsKey(candidate.Point) ? 1 : 0)
+                    .ThenBy(candidate => {
+                        double dx = candidate.Point.X - frontageRoadX;
+                        double dz = candidate.Point.Z - frontageRoadZ;
+                        return dx * dx + dz * dz;
+                    })
+                    .First();
+                signLoc = placement.Point;
+                direction = placement.Direction;
 
                 DrawSign(signLoc, direction, building.Name, building.HouseNumber);
             }
             return doors;
+        }
+
+        private bool TryFindClosestRoadFrontage(IEnumerable<BlockPosition> buildingWalls,
+                IEnumerable<OsmReader.Way> roads, out BlockPosition buildingLoc,
+                out double roadX, out double roadZ) {
+            buildingLoc = default(BlockPosition);
+            roadX = 0;
+            roadZ = 0;
+            double closestDistance = double.MaxValue;
+            bool found = false;
+
+            foreach (BlockPosition wall in buildingWalls) {
+                foreach (OsmReader.Way road in roads) {
+                    for (int i = 1; i < road.Nodes.Length; i++) {
+                        BlockPosition from = _conv.ToBlock(road.Nodes[i - 1].Lat, road.Nodes[i - 1].Long);
+                        BlockPosition to = _conv.ToBlock(road.Nodes[i].Lat, road.Nodes[i].Long);
+                        double segmentX = to.X - from.X;
+                        double segmentZ = to.Z - from.Z;
+                        double lengthSquared = segmentX * segmentX + segmentZ * segmentZ;
+                        double amount = lengthSquared == 0
+                            ? 0
+                            : ((wall.X - from.X) * segmentX + (wall.Z - from.Z) * segmentZ) /
+                                lengthSquared;
+                        amount = Math.Max(0, Math.Min(1, amount));
+                        double projectedX = from.X + amount * segmentX;
+                        double projectedZ = from.Z + amount * segmentZ;
+                        double dx = wall.X - projectedX;
+                        double dz = wall.Z - projectedZ;
+                        double distance = dx * dx + dz * dz;
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            buildingLoc = wall;
+                            roadX = projectedX;
+                            roadZ = projectedZ;
+                            found = true;
+                        }
+                    }
+                }
+            }
+            return found;
         }
 
         enum DoorDirection {
@@ -198,11 +242,28 @@ namespace MinecraftMapper {
                 height = GetHeight(signLoc) + 1;
             }
 
-            _bm.SetBlock(
-                signLoc.X, height.Value, signLoc.Z,
-                _sign_types[(signLoc.X + signLoc.Z) % _sign_types.Length],
-                rotation: (int)direction);
+            if (signType == BlockType.WALL_SIGN) {
+                _bm.SetBlock(
+                    signLoc.X, height.Value, signLoc.Z,
+                    AcquaticBlocks.OakWallSign,
+                    facing: ToBlockFacing(direction));
+            } else {
+                _bm.SetBlock(
+                    signLoc.X, height.Value, signLoc.Z,
+                    _sign_types[Math.Abs((signLoc.X + signLoc.Z) % _sign_types.Length)],
+                    rotation: (int)direction);
+            }
             _bm.SetTileEntity(signLoc.X, height.Value, signLoc.Z, ent);
+        }
+
+        private static BlockFacing ToBlockFacing(Direction direction) {
+            switch (direction) {
+                case Direction.East: return BlockFacing.East;
+                case Direction.West: return BlockFacing.West;
+                case Direction.South: return BlockFacing.South;
+                case Direction.North: return BlockFacing.North;
+                default: throw new ArgumentOutOfRangeException("direction");
+            }
         }
 
         private HashSet<BlockPosition> DrawSignItems(OsmReader.Building building, int top, int left, int bottom, int right, Dictionary<BlockPosition, int> baseHeights, Dictionary<BlockPosition, int> buildingPoints) {
