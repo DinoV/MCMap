@@ -150,6 +150,8 @@ namespace MinecraftMapper {
                 DrawStreetLamps(roadPoints);
                 var buildingPoints = DrawBuildings();
 
+                DrawWoodlands(roadPoints, buildingPoints);
+
                 Save();
 
                 DrawBarriers(buildingPoints);

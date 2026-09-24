@@ -20,6 +20,7 @@ namespace MinecraftMapper {
         public readonly Dictionary<Node, List<Way>> RoadsByNode = new Dictionary<Node, List<Way>>();
         public readonly List<AmenityNode> Amenities = new List<AmenityNode>();
         public readonly List<LandInfo> LandUses = new List<LandInfo>();
+        public readonly List<LandInfo> Woodlands = new List<LandInfo>();
         public readonly List<LeisureInfo> Leisures = new List<LeisureInfo>();
         public readonly List<CoastlineInfo> Coastlines = new List<CoastlineInfo>();
         public readonly List<PierInfo> Piers = new List<PierInfo>();
@@ -570,7 +571,9 @@ namespace MinecraftMapper {
                             Piers.Add(new PierInfo(wayId, nodes.ToArray(), tags.floating));
                         } else if (tags.landUse != LandUse.None) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
-                            LandUses.Add(new LandInfo(wayId, tags.landUse, nodes.ToArray()));
+                            var land = new LandInfo(wayId, tags.landUse, nodes.ToArray());
+                            if (tags.landUse == LandUse.Wood) Woodlands.Add(land);
+                            else LandUses.Add(land);
                         } else if (tags.leisuire != Leisure.None) {
                             var wayId = Convert.ToInt64(data.Attribute("id").Value);
                             Leisures.Add(new LeisureInfo(wayId, tags.leisuire, nodes.ToArray()));
@@ -876,7 +879,8 @@ namespace MinecraftMapper {
 
         public enum LandUse {
             None,
-            Allotments
+            Allotments,
+            Wood
         }
 
         public enum Leisure {
@@ -941,10 +945,13 @@ namespace MinecraftMapper {
                 case "landuse":
                     if (value == "allotments") {
                         tagInfo.landUse = LandUse.Allotments;
+                    } else if (value == "forest") {
+                        tagInfo.landUse = LandUse.Wood;
                     } else RecordUnknown("landuse", value);
                     break;
                 case "natural":
                     if (value == "coastline") tagInfo.coastline = true;
+                    else if (value == "wood") tagInfo.landUse = LandUse.Wood;
                     else RecordUnknown("natural", value);
                     break;
                 case "man_made":
