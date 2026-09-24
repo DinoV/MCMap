@@ -1307,7 +1307,14 @@ def crop_and_resample(
         }
         if source_no_data is not None:
             warp_arguments["srcNodata"] = source_no_data
+        # Elevation samples must remain in the source dataset's declared
+        # vertical units here.  When a single-band source has a compound CRS
+        # with a vertical datum (for example NAVD88), GDAL otherwise applies a
+        # vertical correction while reprojecting.  The absolute-height stage
+        # performs the explicit feet-to-metres conversion later, so allowing
+        # that correction here changes both the datum and units underneath it.
         options = gdal.WarpOptions(
+            options=["-novshift"],
             **warp_arguments,
         )
 
@@ -1991,7 +1998,7 @@ def main() -> int:
                 )
                 print(f"  Detected source units: {vertical_unit_label}")
                 print(
-                    "  Absolute mapping: Minecraft Y = round(elevation metres + "
+                    "  Absolute mapping: Minecraft Y = ceil(elevation metres + "
                     f"{args.minecraft_sea_level})"
                 )
                 if clipped_low or clipped_high:
