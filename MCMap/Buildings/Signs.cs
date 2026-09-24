@@ -36,7 +36,6 @@ namespace MinecraftMapper {
                 // Figure out whre the sign is placed.  This can be a primary point from a single node
                 // where it would be placed on an overhead map, or we'll find the closest point between
                 // the building and a road point.
-                Console.WriteLine("----");
                 OsmReader.Node signPoint = null, buildingWallPoint = null;
 
                 double distance = double.MaxValue;
@@ -141,7 +140,10 @@ namespace MinecraftMapper {
                 signLoc = placement.Point;
                 direction = placement.Direction;
 
+                Console.WriteLine("Building sign at {0}", signLoc);
                 DrawSign(signLoc, direction, building.Name, building.HouseNumber);
+            } else {
+                Console.WriteLine("No road for finding sign loc: {0} {1}", building.HouseNumber, building.Street, building);
             }
             return doors;
         }
