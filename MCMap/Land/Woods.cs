@@ -8,6 +8,13 @@ namespace MinecraftMapper {
         private const int WoodlandSpacing = 8;
         private const int WoodlandCanopyRadius = 2;
 
+        private enum WoodlandTreeSpecies {
+            Spruce,
+            Birch,
+            Oak,
+            Poplar,
+        }
+
         private void DrawWoodlands(
                 Dictionary<BlockPosition, RoadPoint> roadPoints,
                 Dictionary<BlockPosition, int> buildingPoints) {
@@ -53,13 +60,13 @@ namespace MinecraftMapper {
                     }
 
                     ClearNonSolidBlocks(point, groundY + 1, groundY + 3);
+                    WoodlandTreeSpecies species = WoodlandSpecies(seed);
                     if (PositiveModulo(seed >> 10, 6) == 0 &&
                             CanSupportSapling(point, groundY)) {
-                        _bm.SetBlock(point.X, groundY + 1, point.Z,
-                            WoodlandSapling(seed), stage: 0);
+                        DrawWoodlandSapling(point, groundY, species);
                         saplings++;
                     } else {
-                        DrawWoodlandTree(point, groundY, seed);
+                        DrawWoodlandTree(point, groundY, seed, species);
                         rendered++;
                     }
 
@@ -96,18 +103,31 @@ namespace MinecraftMapper {
             return true;
         }
 
-        private void DrawWoodlandTree(BlockPosition point, int groundY, int seed) {
-            int trunkHeight = 4 + PositiveModulo(seed >> 14, 3);
+        private void DrawWoodlandTree(
+                BlockPosition point,
+                int groundY,
+                int seed,
+                WoodlandTreeSpecies species) {
+            bool isPoplar = species == WoodlandTreeSpecies.Poplar;
+            int trunkHeight = (isPoplar ? 6 : 4) + PositiveModulo(seed >> 14, 3);
             string log;
             string leaves;
-            switch (PositiveModulo(seed >> 18, 3)) {
-                case 0:
+            switch (species) {
+                case WoodlandTreeSpecies.Spruce:
                     log = AcquaticBlocks.SpruceLog;
                     leaves = AcquaticBlocks.SpruceLeaves;
                     break;
-                case 1:
+                case WoodlandTreeSpecies.Birch:
                     log = AcquaticBlocks.BirchLog;
                     leaves = AcquaticBlocks.BirchLeaves;
+                    break;
+                case WoodlandTreeSpecies.Poplar:
+                    log = AcquaticBlocks.PoplarLog;
+                    switch (PositiveModulo(seed >> 25, 3)) {
+                        case 0: leaves = AcquaticBlocks.RedPoplarLeaves; break;
+                        case 1: leaves = AcquaticBlocks.OrangePoplarLeaves; break;
+                        default: leaves = AcquaticBlocks.YellowPoplarLeaves; break;
+                    }
                     break;
                 default:
                     log = AcquaticBlocks.OakLog;
@@ -121,7 +141,7 @@ namespace MinecraftMapper {
 
             int canopyBase = groundY + trunkHeight - 2;
             for (int layer = 0; layer < 4; layer++) {
-                int radius = layer < 2 ? 2 : 1;
+                int radius = isPoplar ? 1 : (layer < 2 ? 2 : 1);
                 int y = canopyBase + layer;
                 for (int dx = -radius; dx <= radius; dx++) {
                     for (int dz = -radius; dz <= radius; dz++) {
@@ -133,13 +153,36 @@ namespace MinecraftMapper {
                         int leafX = point.X + dx;
                         int leafZ = point.Z + dz;
                         if (_bm.GetStringID(leafX, y, leafZ) == AcquaticBlocks.Air) {
-                            _bm.SetBlock(leafX, y, leafZ, leaves,
-                                persistent: true,
-                                distance: Math.Max(1, Math.Abs(dx) + Math.Abs(dz)));
+                            if (isPoplar) {
+                                // Poplar leaves have no distance/persistent state
+                                // properties in 26.3.
+                                _bm.SetBlock(leafX, y, leafZ, leaves);
+                            } else {
+                                _bm.SetBlock(leafX, y, leafZ, leaves,
+                                    persistent: true,
+                                    distance: Math.Max(1, Math.Abs(dx) + Math.Abs(dz)));
+                            }
                         }
                     }
                 }
             }
+        }
+
+        private void DrawWoodlandSapling(
+                BlockPosition point,
+                int groundY,
+                WoodlandTreeSpecies species) {
+            string sapling;
+            switch (species) {
+                case WoodlandTreeSpecies.Spruce: sapling = AcquaticBlocks.SpruceSapling; break;
+                case WoodlandTreeSpecies.Birch: sapling = AcquaticBlocks.BirchSapling; break;
+                case WoodlandTreeSpecies.Poplar:
+                    // Unlike legacy saplings, poplar_sapling has no stage property.
+                    _bm.SetBlock(point.X, groundY + 1, point.Z, AcquaticBlocks.PoplarSapling);
+                    return;
+                default: sapling = AcquaticBlocks.OakSapling; break;
+            }
+            _bm.SetBlock(point.X, groundY + 1, point.Z, sapling, stage: 0);
         }
 
         private bool IsWaterBlock(BlockPosition point, int y) {
@@ -156,12 +199,12 @@ namespace MinecraftMapper {
                 block == AcquaticBlocks.MossBlock;
         }
 
-        private static string WoodlandSapling(int seed) {
-            switch (PositiveModulo(seed >> 18, 3)) {
-                case 0: return AcquaticBlocks.SpruceSapling;
-                case 1: return AcquaticBlocks.BirchSapling;
-                default: return AcquaticBlocks.OakSapling;
-            }
+        private static WoodlandTreeSpecies WoodlandSpecies(int seed) {
+            // Keep the original spruce/birch/oak choice for most cells and use
+            // a separate hash band to introduce poplars without biasing it.
+            if (PositiveModulo(seed >> 22, 4) == 0)
+                return WoodlandTreeSpecies.Poplar;
+            return (WoodlandTreeSpecies)PositiveModulo(seed >> 18, 3);
         }
 
         private static int WoodlandSeed(long wayId, int x, int z) {
