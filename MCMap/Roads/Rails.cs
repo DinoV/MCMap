@@ -19,7 +19,7 @@ namespace MinecraftMapper {
                         SaveBlocks();
                     }
 
-                    WriteLine("Rail: {0} ({1}/{2})", rail.Name, cur, _reader.Rails.Count);
+                    WriteLine($"{rail.Id:10} Rail: {rail.Name} ({cur}/{_reader.Rails.Count})");
                     var start = rail.Nodes[0];
                     for (int i = 1; i < rail.Nodes.Length; i++) {
                         var from = _conv.ToBlock(start.Lat, start.Long);

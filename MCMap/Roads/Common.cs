@@ -138,7 +138,7 @@ namespace MinecraftMapper {
                         }
                     }
 
-                    WriteLine("{0} {1} {2} ({3}/{4})", way.Id, way.Name, way.RoadType, cur, _reader.Ways.Count);
+                    WriteLine($"{way.Id:10} Road {way.Name} {way.RoadType} ({cur}/{_reader.Ways.Count})");
                     var style = GetRoadStyle(way);
                     if (style != null) {
                         style.Render(roadPoints);

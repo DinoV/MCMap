@@ -61,14 +61,8 @@ namespace MinecraftMapper {
                     ? 0
                     : DrawPierEdgeFences(deckPoints, deckHeight);
 
-                WriteLine("Rendered {0} pier {1}: {2} blocks at height {3}, " +
-                    "{4} supports, {5} edge fences.",
-                    pier.Floating ? "floating" : "fixed",
-                    pier.WayId,
-                    rendered,
-                    deckHeight,
-                    supports,
-                    fences);
+                WriteLine($"{pier.WayId:10} Pier {(pier.Floating ? "floating" : "fixed")}: {rendered} blocks at height {deckHeight}, " +
+                    "{supports} supports, {fences} edge fences.");
             }
         }
 
